@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Exception;
 use App\Models\Client;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class ClientController extends Controller
 {
@@ -36,7 +37,7 @@ class ClientController extends Controller
     public function show(string $id)
     {
         try {
-            $client = Client::with('user')->find($id);
+            $client = Client::with('user')->where('user_id', $id)->get();
 
             return response()->json([
                 'data' => $client,
@@ -68,9 +69,18 @@ class ClientController extends Controller
                 'password' => 'nullable|string|min:8',
                 'telefono' => 'nullable|string|max:20',
                 'direccion' => 'nullable|string|max:255',
-                'profile_photo' => 'nullable|string|max:255',
-                'stripe_customer_id' => 'nullable|string|max:255',
+                'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
             ]);
+
+            // Solo actualiza la foto de perfil si se subió una nueva
+            $profilePhotoPath = $user->profile_photo;
+
+            if ($request->hasFile('profile_photo') && $request->file('profile_photo')->isValid()) {
+                if ($user->profile_photo) {
+                    Storage::disk('public')->delete($user->profile_photo);
+                }
+                $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
+            }
 
             $user->update([
                 'nombre' => $validated['nombre'],
@@ -78,11 +88,7 @@ class ClientController extends Controller
                 'password' => isset($validated['password']) ? bcrypt($validated['password']) : $user->password,
                 'telefono' => $validated['telefono'] ?? $user->telefono,
                 'direccion' => $validated['direccion'] ?? $user->direccion,
-                'profile_photo' => $validated['profile_photo'] ?? $user->profile_photo,
-            ]);
-
-            $client->update([
-                'stripe_customer_id' => $validated['stripe_customer_id'] ?? $client->stripe_customer_id,
+                'profile_photo' => $profilePhotoPath,
             ]);
 
             $client->load('user');

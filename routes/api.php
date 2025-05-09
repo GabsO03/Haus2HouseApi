@@ -7,11 +7,16 @@ use App\Http\Controllers\ClientController;
 use App\Http\Controllers\WorkerController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StripeController;
+use App\Http\Controllers\UserController;
 
 // Registro y login
 Route::post('/register', [RegisterController::class, 'store']);
 Route::post('/login', [SessionController::class, 'store']);
 Route::post('/logout', [SessionController::class, 'destroy']);
+
+//Users
+Route::get('/users/{user}', [UserController::class, 'show']);
+
 
 // Clientes
 Route::get('/clients', [ClientController::class, 'index']);
@@ -19,6 +24,7 @@ Route::get('/clients/{client}', [ClientController::class, 'show']);
 Route::put('/clients/{client}', [ClientController::class, 'update']);
 Route::delete('/clients/{client}', [ClientController::class, 'destroy']);
 Route::post('/clients/{id}/payment-method', [StripeController::class, 'aniadirMetodoPago']);
+Route::get('/clients/{id}/payment-methods', [StripeController::class, 'obtenerMetodosPago']);
 
 // Trabajadores
 Route::get('/workers', [WorkerController::class, 'index']);
@@ -31,7 +37,9 @@ Route::delete('/workers/{worker}', [WorkerController::class, 'destroy']);
 
 
 // Manejo de contratos
+Route::get('/services/types', [ServiceController::class, 'serviceTypes']);
+Route::get('/services/{service}', [ServiceController::class, 'show']);
 Route::post('/services', [ServiceController::class, 'store']);
-Route::get('/services/pendientes', [ServiceController::class, 'listarPendientes']);
+Route::post('/services/pendientes', [ServiceController::class, 'index']);
 Route::put('/services/{service}/estado', [ServiceController::class, 'actualizarEstado']);
 Route::put('/services/{service}/valorar', [ServiceController::class, 'valorar']);

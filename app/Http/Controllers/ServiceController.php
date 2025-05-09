@@ -4,17 +4,136 @@ namespace App\Http\Controllers;
 
 use DateTime;
 use Exception;
+use Carbon\Carbon;
 use App\Enums\Estados;
 use App\Models\Worker;
 use App\Models\Service;
 use App\Models\ServiceType;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\StripeController;
 use App\Notifications\ServiceAssignedNotification;
 
 class ServiceController extends Controller
 {
+
+    public function show(int $service)
+    {
+        $serviceData = Service::with('client.user', 'worker.user', 'serviceType')
+            ->findOrFail($service);
+
+        $user = Auth::user();
+        
+        // Verifico si el usuario es el cliente o el trabajador del servicio
+        if (!$user || ($user->id !== $serviceData->client_id && $user->id !== $serviceData->worker_id)) {
+            return response()->json([
+                'data' => [],
+                'message' => 'No tienes permiso para acceder a esta información',
+                'status' => 403,
+            ], 403);
+        }
+
+        try {
+            return response()->json([
+                'data' => $serviceData,
+                'message' => 'Servicio obtenido correctamente',
+                'status' => 200
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al obtener el servicio: ' . $e->getMessage(),
+                'status' => 500
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene la disponibilidad y los servicios del trabajador para un mes específico
+     */
+    public function getSchedule(Request $request)
+    {
+        try {
+            $user = Auth::user();
+            if (!$user || $user->role !== 'worker') {
+                return response()->json([
+                    'data' => [],
+                    'message' => 'No tienes permiso para acceder a esta información',
+                    'status' => 403
+                ], 403);
+            }
+
+            $worker = Worker::where('user_id', $user->id)->firstOrFail();
+
+            // Usar fecha actual si no se proporcionan mes y año
+            $today = Carbon::today();
+            $month = $request->input('month', $today->month);
+            $year = $request->input('year', $today->year);
+
+            // Validar parámetros de mes y año
+            $request->merge(['month' => $month, 'year' => $year]);
+            $request->validate([
+                'month' => 'required|integer|between:1,12',
+                'year' => 'required|integer|min:2020|max:2030',
+            ]);
+
+            // Obtener disponibilidad
+            $disponibilidad = json_decode($worker->disponibilidad, true) ?? [];
+
+            // Obtener servicios ACCEPTED o IN_PROGRESS para el mes
+            $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth();
+            $endOfMonth = $startOfMonth->copy()->endOfMonth();
+
+            $services = Service::where('worker_id', $worker->id)
+                ->whereIn('status', [Estados::ACCEPTED->value, Estados::IN_PROGRESS->value])
+                ->whereBetween('start_time', [$startOfMonth, $endOfMonth])
+                ->with('serviceType')
+                ->get()
+                ->map(function ($service) {
+                    return [
+                        'day' => Carbon::parse($service->start_time)->day,
+                        'start_time' => Carbon::parse($service->start_time)->format('H:i'),
+                        'end_time' => Carbon::parse($service->end_time)->format('H:i'),
+                        'service_type' => $service->serviceType->name,
+                    ];
+                })->groupBy('day')->toArray();
+
+            return response()->json([
+                'data' => [
+                    'disponibilidad' => $disponibilidad,
+                    'services' => $services,
+                ],
+                'message' => 'Horario obtenido correctamente',
+                'status' => 200
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al obtener el horario: ' . $e->getMessage(),
+                'status' => 500
+            ], 500);
+        }
+    }
+
+    public function serviceTypes() {
+        try {
+
+            $servicesTypes = ServiceType::all();
+
+            return response()->json([
+                'data' => $servicesTypes,
+                'message' => 'Servicio obtenido correctamente',
+                'status' => 200
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al obtener el servicio: ' . $e->getMessage(),
+                'status' => 500
+            ], 500);
+        }
+    }
+
     /**
      * Crea un nuevo servicio
      */
@@ -92,8 +211,23 @@ class ServiceController extends Controller
     /**
      * Lista servicios pendientes
      */
-    public function index(Worker $worker)
+    public function index(Request $request)
     {
+        $request->validate([
+            'id' => 'required|integer|exists:workers,id'
+        ]);
+
+        $worker = Worker::findOrFail($request->id);
+
+        $user = Auth::user();
+        if (!$user || ($user->role !== 'worker' && $user->worker->id !== $worker->id)) {
+            return response()->json([
+                'data' => [],
+                'message' => 'No tienes permiso para acceder a esta información',
+                'status' => 403,
+            ], 403);
+        }
+
         try {
             $services = Service::where('status', Estados::PENDING->value)
                 ->where('worker_id', $worker->id)
@@ -113,6 +247,8 @@ class ServiceController extends Controller
             ], 500);
         }
     }
+
+
 
     /**
      * Actualizar el estado de un servicio
@@ -151,6 +287,16 @@ class ServiceController extends Controller
                     if ($nuevoEstado === Estados::ACCEPTED) {
                         try {
                             StripeController::procesarPago($service);
+
+                            if (!WorkerController::updateDisponibilidad($service)) {
+                                // Revertir el pago si falla la actualización
+                                StripeController::reembolsar($service);
+                                return response()->json([
+                                    'data' => [],
+                                    'message' => 'Error al actualizar la disponibilidad del trabajador',
+                                    'status' => 500
+                                ], 500);
+                            }
                         } catch (Exception $e) {
                             return response()->json([
                                 'data' => [],
@@ -204,8 +350,6 @@ class ServiceController extends Controller
                         ], 400);
                     }
 
-                    // Si se completa se actualiza el tiempo de finalizacion
-                    // TODO actualizar el duration_hours, guardarlo como milisegundos
                     
                     if ($nuevoEstado === Estados::COMPLETED) {
                         $service->end_time = now();

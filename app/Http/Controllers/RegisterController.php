@@ -24,14 +24,8 @@ class RegisterController extends Controller
                 'email' => 'required|email|unique:users,email',
                 'telefono' => 'nullable|string|max:20',
                 'direccion' => 'nullable|string|max:255',
-                'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
                 'password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
             ]);
-
-            $profilePhotoPath = null;
-            if ($request->hasFile('profile_photo') && $request->file('profile_photo')->isValid()) {
-                $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-            }
             
             $stripeCustomer = StripeController::crearCliente(
                 $validatedAttributes['email'],
@@ -43,8 +37,7 @@ class RegisterController extends Controller
                 'email' => $validatedAttributes['email'],
                 'telefono' => $validatedAttributes['telefono'],
                 'direccion' => $validatedAttributes['direccion'],
-                'profile_photo' => $profilePhotoPath,
-                'password' => bcrypt($validatedAttributes['password']),
+                'password' => $validatedAttributes['password'],
                 'rol' => 'client',
             ]);
 

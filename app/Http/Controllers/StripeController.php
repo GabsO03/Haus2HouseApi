@@ -3,12 +3,10 @@
 namespace App\Http\Controllers;
 
 use Exception;
-use Stripe\Stripe;
 use Stripe\Customer;
 use App\Models\Client;
 use App\Models\Service;
-use Stripe\StripeClient; // Añadimos StripeClient
-use Stripe\PaymentIntent;
+use Stripe\StripeClient;
 use Illuminate\Http\Request;
 
 class StripeController extends Controller
@@ -39,56 +37,6 @@ class StripeController extends Controller
     /**
      * Añadir el método de pago del cliente
      */
-    // public static function aniadirMetodoPago(Request $request, string $id)
-    // {
-    //     try {
-    //         self::initialize();
-    //         $client = Client::findOrFail($id);
-
-    //         if (!$client->stripe_customer_id) {
-    //             throw new Exception('Cliente sin cuenta de Stripe configurada');
-    //         }
-
-    //         $validated = $request->validate([
-    //             'card_number' => 'required|string',
-    //             'exp_month' => 'required|integer|between:1,12',
-    //             'exp_year' => 'required|integer|min:2023',
-    //             'cvc' => 'required|string|min:3|max:4',
-    //         ]);
-
-    //         $paymentMethod = self::$stripe->paymentMethods->create([
-    //             'type' => 'card',
-    //             'card' => [
-    //                 'number' => $validated['card_number'],
-    //                 'exp_month' => $validated['exp_month'],
-    //                 'exp_year' => $validated['exp_year'],
-    //                 'cvc' => $validated['cvc'],
-    //             ],
-    //         ]);
-
-    //         self::$stripe->paymentMethods->attach(
-    //             $validated['payment_method_id'],
-    //             ['customer' => $client->stripe_customer_id]
-    //         );
-
-    //         self::$stripe->customers->update($client->stripe_customer_id, [
-    //             'invoice_settings' => [
-    //                 'default_payment_method' => $validated['payment_method_id'],
-    //             ],
-    //         ]);
-
-    //         return response()->json([
-    //             'message' => 'Método de pago añadido',
-    //             'status' => 200,
-    //         ]);
-    //     } catch (Exception $e) {
-    //         return response()->json([
-    //             'message' => 'Error al añadir método de pago: ' . $e->getMessage(),
-    //             'status' => 500,
-    //         ], 500);
-    //     }
-    // }
-    
     public static function aniadirMetodoPago(Request $request, string $id)
     {
         try {
@@ -132,6 +80,33 @@ class StripeController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'message' => 'Error al añadir método de pago: ' . $e->getMessage(),
+                'status' => 500,
+            ], 500);
+        }
+    }
+
+    public static function obtenerMetodosPago(Request $request, string $id)
+    {
+        try {
+            self::initialize();
+            $client = Client::findOrFail($id);
+
+            if (!$client->stripe_customer_id) {
+                throw new Exception('Cliente sin cuenta de Stripe configurada');
+            }
+
+            $paymentMethods = self::$stripe->paymentMethods->list([
+                'customer' => $client->stripe_customer_id,
+                'type' => 'card',
+            ]);
+
+            return response()->json([
+                'data' => $paymentMethods->data,
+                'status' => 200,
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'message' => 'Error al obtener métodos de pago: ' . $e->getMessage(),
                 'status' => 500,
             ], 500);
         }

@@ -4,10 +4,13 @@ namespace App\Models;
 
 use App\Enums\Estados;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Service extends Model
 {
     protected $table = 'services';
+    protected $keyType = 'string';
+    public $incrementing = false;
 
     protected $fillable = [
         'client_id',
@@ -30,6 +33,16 @@ class Service extends Model
         'worker_comments',
         'incident_report',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = Str::uuid()->toString();
+            }
+        });
+    }
 
     public function client()
     {

@@ -3,21 +3,24 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Worker extends Model
 {
     protected $table = 'workers';
+    protected $keyType = 'string';
+    public $incrementing = false;
 
     protected $fillable = [
         'user_id',
         'dni',
         'bio',
-        'habilidades',
+        'services_id',
         'disponibilidad',
         'rating',
         'cantidad_ratings',
         'current_location',
-        'available',
+        'active',
     ];
 
     public function user()
@@ -28,5 +31,15 @@ class Worker extends Model
     public function services()
     {
         return $this->hasMany(Service::class, 'worker_id');
+    }
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = Str::uuid()->toString();
+            }
+        });
     }
 }

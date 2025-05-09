@@ -6,8 +6,10 @@ use Exception;
 use Carbon\Carbon;
 use App\Models\User;
 use App\Models\Worker;
+use App\Models\Service;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class WorkerController extends Controller
 {
@@ -87,7 +89,7 @@ class WorkerController extends Controller
     /**
      * Busca un trabajador disponible según habilidades y disponibilidad
      */
-    public static function encontrarWorker(array $validated, int $previousWorkerId = null) // Ese id por si el primero lo cancela, así no se le asigna de nuevo
+    public static function encontrarWorker(array $validated, string $previousWorkerId = null) // Ese id por si el primero lo cancela, así no se le asigna de nuevo
     {
         $startTime = Carbon::parse($validated['start_time'])->setTimezone('UTC');
         $dayOfMonth = $startTime->day; // Ejemplo: 19
@@ -114,6 +116,99 @@ class WorkerController extends Controller
     }
 
     /**
+    * Actualiza la disponibilidad del trabajador según el horario de un servicio aceptado
+    */
+    public static function updateDisponibilidad(Service $service)
+    {
+        try {
+            $worker = Worker::findOrFail($service->worker_id);
+            $disponibilidad = json_decode($worker->disponibilidad, true);
+
+            // Obtengo el día del mes y los horarios del servicio
+            $startTime = Carbon::parse($service->start_time);
+            $endTime = Carbon::parse($service->end_time);
+            $dayOfMonth = $startTime->day;
+            $serviceStart = $startTime->format('H:i');
+            $serviceEnd = $endTime->format('H:i');
+
+            foreach ($disponibilidad as &$dia) {
+
+                // Busco el día correspondiente en disponibilidad
+                if ($dia['dia'] == $dayOfMonth) {
+                    $newHoras = [];
+
+                    // Cogemos las horas que hay en ese día
+                    foreach ($dia['horas'] as $hora) {
+
+                        // Si no hay nada, simplemente continua
+                        if ($hora === null) {
+                            $newHoras[] = $hora;
+                            continue;
+                        }
+
+                        // Si hay, parseamos el rango de disponibilidad
+                        [$horaStart, $horaEnd] = explode('-', $hora);
+                        $horaStartTime = Carbon::createFromFormat('H:i', $horaStart);
+                        $horaEndTime = Carbon::createFromFormat('H:i', $horaEnd);
+
+                        // Si el servicio está completamente dentro del rango
+                        if ($serviceStart >= $horaStart && $serviceEnd <= $horaEnd) {
+                            // Dividir el rango si es necesario
+                            if ($serviceStart > $horaStart) {
+                                $diff = Carbon::createFromFormat('H:i', $serviceStart)->diffInMinutes($horaStartTime);
+                                if ($diff > 60) { // Más de 1 hora
+                                    $newHoras[] = "{$horaStart}-{$serviceStart}";
+                                }
+                            }
+                            if ($serviceEnd < $horaEnd) {
+                                $diff = $horaEndTime->diffInMinutes(Carbon::createFromFormat('H:i', $serviceEnd));
+                                if ($diff > 60) { // Más de 1 hora
+                                    $newHoras[] = "{$serviceEnd}-{$horaEnd}";
+                                }
+                            }
+                        } elseif ($serviceStart < $horaStart && $serviceEnd > $horaStart && $serviceEnd <= $horaEnd) {
+                            // Caso 1: Servicio empieza antes pero termina dentro
+                            if ($serviceEnd < $horaEnd) {
+                                $diff = $horaEndTime->diffInMinutes(Carbon::createFromFormat('H:i', $serviceEnd));
+                                if ($diff > 60) { // Más de 1 hora
+                                    $newHoras[] = "{$serviceEnd}-{$horaEnd}";
+                                }
+                            }
+                        } elseif ($serviceStart >= $horaStart && $serviceStart < $horaEnd && $serviceEnd > $horaEnd) {
+                            // Caso 2: Servicio empieza dentro pero termina después
+                            if ($serviceStart > $horaStart) {
+                                $diff = Carbon::createFromFormat('H:i', $serviceStart)->diffInMinutes($horaStartTime);
+                                if ($diff > 60) { // Más de 1 hora
+                                    $newHoras[] = "{$horaStart}-{$serviceStart}";
+                                }
+                            }
+                        } elseif ($serviceStart <= $horaStart && $serviceEnd >= $horaEnd) {
+                            // Caso 3: Servicio cubre todo el rango y más
+                            continue;
+                        } else {
+                            // Mantener el rango si no hay solapamiento
+                            $newHoras[] = $hora;
+                        }
+                    }
+                    $dia['horas'] = $newHoras;
+                    break;
+                }
+            }
+
+            // Actualizar disponibilidad
+            $worker->disponibilidad = json_encode($disponibilidad);
+            $worker->save();
+
+            Log::info('Disponibilidad actualizada para trabajador:', ['worker_id' => $worker->id, 'service_id' => $service->id]);
+
+            return true;
+        } catch (Exception $e) {
+            Log::error('Error al actualizar disponibilidad:', ['error' => $e->getMessage(), 'worker_id' => $service->worker_id, 'service_id' => $service->id]);
+            return false;
+        }
+    }
+
+    /**
      * Store a newly created resource in storage.
      */
     public function store(Request $request)
@@ -136,7 +231,7 @@ class WorkerController extends Controller
             $user = User::create([
                 'nombre' => $validated['nombre'],
                 'email' => $validated['email'],
-                'password' => bcrypt($validated['password']),
+                'password' => $validated['password'],
                 'rol' => 'worker',
             ]);
 
@@ -169,7 +264,8 @@ class WorkerController extends Controller
     public function show($id)
     {
         try {
-            $worker = Worker::with('user')->findOrFail($id);
+            $worker = Worker::with('user')->where('user_id', $id)->get();
+            // $worker = Worker::with('user')->findOrFail($id);
     
             return response()->json([
                 'data' => $worker, 'message' => 'Trabajador encontrado', 'status' => 200
@@ -200,21 +296,31 @@ class WorkerController extends Controller
                 'password' => 'nullable|string|min:8',
                 'dni' => 'required|string|unique:workers,dni,' . $worker->id,
                 'services_id' => 'required|array',
-                'disponibilidad' => 'nullable|array',
                 'bio' => 'nullable|string',
                 'active' => 'nullable|boolean',
+                'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
             ]);
+
+            // Solo actualiza la foto de perfil si se subió una nueva
+            $profilePhotoPath = $user->profile_photo;
+
+            if ($request->hasFile('profile_photo') && $request->file('profile_photo')->isValid()) {
+                if ($user->profile_photo) {
+                    Storage::disk('public')->delete($user->profile_photo);
+                }
+                $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
+            }
             
             $user->update([
                 'nombre' => $validated['nombre'],
                 'email' => $validated['email'],
                 'password' => isset($validated['password']) ? bcrypt($validated['password']) : $user->password,
+                'profile_photo' => $profilePhotoPath
             ]);
 
             $worker->update([
                 'dni' => $validated['dni'],
                 'services_id' => json_encode($validated['services_id']),
-                'disponibilidad' => $validated['disponibilidad'] ? json_encode($validated['disponibilidad']) : null,
                 'bio' => $validated['bio'],
                 'active' => $validated['active'] ?? false,
             ]);
@@ -263,6 +369,22 @@ class WorkerController extends Controller
                 'message' => 'Error al actualizar horario: ' . $e->getMessage(),
                 'status' => 500
             ], 500);
+        }
+    }
+
+    public function getHorario($worker) {
+        try {
+            $worker = Worker::findOrFail($worker);
+    
+            return response()->json([
+                'data' => $worker->disponibilidad, 'message' => 'Horario del trabajador', 'status' => 200
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al obtener el horario',
+                'status' => 404
+            ], 404);
         }
     }
 
