@@ -5,11 +5,15 @@ namespace App\Http\Controllers;
 use Exception;
 use Carbon\Carbon;
 use App\Models\User;
+use App\Enums\Estados;
 use App\Models\Worker;
 use App\Models\Service;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 
 class WorkerController extends Controller
 {
@@ -29,9 +33,109 @@ class WorkerController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
-                'message' => 'Error al obtener trabajadores: ' . $e->getMessage(),
+                'message' => 'Error al obtener trabajadores',
                 'status' => 500
             ], 500);
+        }
+    }
+
+    
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'nombre' => 'required|string|max:255',
+                'email' => 'required|email|unique:users,email',
+                'password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+                'dni' => 'required|string|unique:workers,dni',
+                'services_id' => 'required|array',
+                'horario_semanal' => 'required|array|size:7',
+                'horario_semanal.*.day' => 'required|integer|min:0|max:6',
+                'horario_semanal.*.horas' => 'required|array|size:2',
+                'horario_semanal.*.horas.*' => 'nullable|string',
+                'bio' => 'nullable|string',
+                'active' => 'nullable|boolean',
+            ]);
+            
+            $user = User::create([
+                'nombre' => $validated['nombre'],
+                'email' => $validated['email'],
+                'password' => $validated['password'],
+                'rol' => 'worker',
+            ]);
+
+            $disponibilidad = $this->generateMonthlyAvailability($validated['horario_semanal'], collect([]), now());
+
+            $worker = Worker::create([
+                'user_id' => $user->id,
+                'dni' => $validated['dni'],
+                'services_id' => json_encode($validated['services_id']),
+                'horario_semanal' => json_encode($validated['horario_semanal']),
+                'disponibilidad' => json_encode($disponibilidad),
+                'bio' => $validated['bio'],
+                'active' => $validated['active'] ?? false,
+                'rating' => 0.00,
+                'cantidad_ratings' => 0,
+            ]);
+    
+            $worker->load('user');
+    
+            return response()->json([
+                'data' => $worker, 'message' => 'Trabajador creado', 'status' => 201
+            ], 201);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [], 'message' => 'Error al crear trabajador: ' . $e->getMessage(), 'status' => 500
+            ], 500);
+        }
+    }
+
+    /**
+     * Display the specified resource.
+     */
+    public function show($id)
+    {
+        try {
+            $worker = Worker::with('user')->where('user_id', $id)->firstOrFail();
+    
+            $worker_comments = Worker::with([
+                'user',
+                'services' => function ($query) {
+                    $query->whereNotNull('client_comments')
+                          ->whereNotNull('client_rating')
+                          ->with(['client.user' => function ($query) {
+                              $query->select('id', 'nombre');
+                          }]);
+                }
+            ])->where('user_id', $id)->firstOrFail();
+
+            $comments = $worker_comments->services->map(function ($service) {
+                return [
+                    'client_name' => $service->client->user->nombre,
+                    'client_rating' => $service->client_rating,
+                    'client_comments' => $service->client_comments,
+                    'service_id' => $service->id,
+                    'created_at' => $service->created_at->toDateTimeString(),
+                ];
+            });
+
+            return response()->json([
+                'data' => [
+                    'worker' => $worker,
+                    'comments' => $comments
+                ],
+                'message' => 'Trabajador encontrado junto a lo comentarios de los clientes',
+                'status' => 200,
+            ]);
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al obtener trabajador',
+                'status' => 404
+            ], 404);
         }
     }
 
@@ -80,7 +184,7 @@ class WorkerController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
-                'message' => 'Error al filtrar trabajadores: ' . $e->getMessage(),
+                'message' => 'Error al filtrar trabajadores',
                 'status' => 500
             ], 500);
         }
@@ -106,11 +210,11 @@ class WorkerController extends Controller
                 AND ?::time BETWEEN split_part(h.hora #>> '{}', '-', 1)::time AND split_part(h.hora #>> '{}', '-', 2)::time
             )", [$dayOfMonth, $startHour]);
 
-        if ($previousWorkerId) {
+        if ($previousWorkerId != null) {
             $query->where('id', '!=', $previousWorkerId); // Para que no sea al trabajador que canceló
         }
 
-        $trabajadorEncontrado = Worker::with('user')->find($query->first()->id);
+        $trabajadorEncontrado = $query->first();
 
         return $trabajadorEncontrado;
     }
@@ -118,11 +222,14 @@ class WorkerController extends Controller
     /**
     * Actualiza la disponibilidad del trabajador según el horario de un servicio aceptado
     */
-    public static function updateDisponibilidad(Service $service)
+    public static function updateDisponibilidadPorServicio(Service $service, $disponibilidad = [])
     {
         try {
-            $worker = Worker::findOrFail($service->worker_id);
-            $disponibilidad = json_decode($worker->disponibilidad, true);
+
+            if (empty($disponibilidad)) {
+                $worker = Worker::findOrFail($service->worker_id);
+                $disponibilidad = json_decode($worker->disponibilidad, true);
+            }
 
             // Obtengo el día del mes y los horarios del servicio
             $startTime = Carbon::parse($service->start_time);
@@ -195,13 +302,7 @@ class WorkerController extends Controller
                 }
             }
 
-            // Actualizar disponibilidad
-            $worker->disponibilidad = json_encode($disponibilidad);
-            $worker->save();
-
-            Log::info('Disponibilidad actualizada para trabajador:', ['worker_id' => $worker->id, 'service_id' => $service->id]);
-
-            return true;
+            return $disponibilidad;
         } catch (Exception $e) {
             Log::error('Error al actualizar disponibilidad:', ['error' => $e->getMessage(), 'worker_id' => $service->worker_id, 'service_id' => $service->id]);
             return false;
@@ -209,128 +310,91 @@ class WorkerController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
-    {
-        try {
-            $validated = $request->validate([
-                'nombre' => 'required|string|max:255',
-                'email' => 'required|email|unique:users,email',
-                'password' => 'required|string|min:8',
-                'dni' => 'required|string|unique:workers,dni',
-                'services_id' => 'required|array',
-                'disponibilidad' => 'required|array|min:28|max:31',
-                'disponibilidad.*.dia' => 'required|integer|between:1,31',
-                'disponibilidad.*.horas' => 'present|array',
-                'disponibilidad.*.horas.*' => 'nullable|string',
-                'bio' => 'nullable|string',
-                'active' => 'nullable|boolean',
-            ]);
-            
-            $user = User::create([
-                'nombre' => $validated['nombre'],
-                'email' => $validated['email'],
-                'password' => $validated['password'],
-                'rol' => 'worker',
-            ]);
-
-            $worker = Worker::create([
-                'user_id' => $user->id,
-                'dni' => $validated['dni'],
-                'services_id' => json_encode($validated['services_id']),
-                'disponibilidad' => $validated['disponibilidad'] ? json_encode($validated['disponibilidad']) : null,
-                'bio' => $validated['bio'],
-                'active' => $validated['active'] ?? false,
-                'rating' => 0.00,
-                'cantidad_ratings' => 0,
-            ]);
-    
-            $worker->load('user');
-    
-            return response()->json([
-                'data' => $worker, 'message' => 'Trabajador creado', 'status' => 201
-            ], 201);
-        } catch (Exception $e) {
-            return response()->json([
-                'data' => [], 'message' => 'Error al crear trabajador: ' . $e->getMessage(), 'status' => 500
-            ], 500);
-        }
-    }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show($id)
-    {
-        try {
-            $worker = Worker::with('user')->where('user_id', $id)->get();
-            // $worker = Worker::with('user')->findOrFail($id);
-    
-            return response()->json([
-                'data' => $worker, 'message' => 'Trabajador encontrado', 'status' => 200
-            ]);
-        } catch (Exception $e) {
-            return response()->json([
-                'data' => [],
-                'message' => 'Error al obtener trabajador',
-                'status' => 404
-            ], 404);
-        }
-    }
-
-
-    /**
      * Update the specified resource in storage.
      */
     public function updatePerfil(Request $request, $worker)
     {
         try {
-            $worker = Worker::find($worker);
+            // Buscar el trabajador
+            $worker = Worker::where('user_id', $worker)->firstOrFail();
             $user = $worker->user;
 
-            
-            $validated = $request->validate([
-                'nombre' => 'required|string|max:255',
-                'email' => 'required|email|unique:users,email,' . $user->id,
-                'password' => 'nullable|string|min:8',
-                'dni' => 'required|string|unique:workers,dni,' . $worker->id,
-                'services_id' => 'required|array',
-                'bio' => 'nullable|string',
-                'active' => 'nullable|boolean',
-                'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-            ]);
+            // Extraer datos manualmente
+            $nombre = $request->input('nombre');
+            $email = $request->input('email');
+            $telefono = $request->input('telefono', '');
+            $direccion = $request->input('direccion', '');
+            $dni = $request->input('dni');
+            $services_id = $request->input('services_id');
+            $bio = $request->input('bio', '');
+            $active = $request->input('active', '0') === '1';
+            $profile_photo = $request->file('profile_photo');
 
-            // Solo actualiza la foto de perfil si se subió una nueva
+            // Verificar qué datos están llegando
+            $received_data = [
+                'nombre' => $nombre,
+                'email' => $email,
+                'telefono' => $telefono,
+                'direccion' => $direccion,
+                'dni' => $dni,
+                'services_id' => $services_id,
+                'bio' => $bio,
+                'active' => $active,
+                'profile_photo' => $profile_photo ? 'File present' : 'No file'
+            ];
+
+            // Si los campos requeridos no están presentes, devolver un error con los datos recibidos
+            if (empty($nombre) || empty($email) || empty($dni) || empty($services_id)) {
+                return response()->json([
+                    'data' => [],
+                    'message' => 'Campos requeridos faltantes. Datos recibidos: ' . json_encode($received_data),
+                    'status' => 422
+                ], 422);
+            }
+
+            // Validar el formato del email
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return response()->json([
+                    'data' => [],
+                    'message' => 'El email no es válido.',
+                    'status' => 422
+                ], 422);
+            }
+
+            // Manejar la foto de perfil
             $profilePhotoPath = $user->profile_photo;
-
-            if ($request->hasFile('profile_photo') && $request->file('profile_photo')->isValid()) {
+            if ($profile_photo && $profile_photo->isValid()) {
                 if ($user->profile_photo) {
                     Storage::disk('public')->delete($user->profile_photo);
                 }
-                $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
+                $profilePhotoPath = $profile_photo->store('profile_photos', 'public');
             }
-            
+
+            // Actualizar el usuario
             $user->update([
-                'nombre' => $validated['nombre'],
-                'email' => $validated['email'],
-                'password' => isset($validated['password']) ? bcrypt($validated['password']) : $user->password,
-                'profile_photo' => $profilePhotoPath
+                'nombre' => $nombre,
+                'email' => $email,
+                'telefono' => $telefono,
+                'direccion' => $direccion,
+                'profile_photo' => $profilePhotoPath,
             ]);
 
+            // Actualizar el trabajador
             $worker->update([
-                'dni' => $validated['dni'],
-                'services_id' => json_encode($validated['services_id']),
-                'bio' => $validated['bio'],
-                'active' => $validated['active'] ?? false,
+                'dni' => $dni,
+                'services_id' => $services_id,
+                'bio' => $bio,
+                'active' => $active,
             ]);
 
             $worker->load('user');
 
             return response()->json([
-                'data' => $worker, 'message' => 'Perfil actualizado', 'status' => 200
+                'data' => $worker,
+                'message' => 'Perfil actualizado',
+                'status' => 200
             ]);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return response()->json([
                 'data' => [],
                 'message' => 'Error al actualizar perfil: ' . $e->getMessage(),
@@ -339,52 +403,131 @@ class WorkerController extends Controller
         }
     }
 
+
     /**
      * Actualiza el horario del trabajador
      */
     public function updateHorario(Request $request, $worker)
     {
         try {
-            $worker = Worker::find($worker);
+            $worker = Worker::where('user_id', $worker)->firstOrFail();
 
             $validated = $request->validate([
-                'disponibilidad' => 'required|array|min:28|max:31',
-                'disponibilidad.*.dia' => 'required|integer|between:1,31',
-                'disponibilidad.*.horas' => 'present|array',
-                'disponibilidad.*.horas.*' => 'nullable|string'
+                'horario_semanal' => 'required|array|size:7',
+                'horario_semanal.*.day' => 'required|integer|min:0|max:6',
+                'horario_semanal.*.horas' => 'required|array|size:2',
+                'horario_semanal.*.horas.*' => 'nullable|string'
             ]);
 
+            $services = Service::where('worker_id', $worker->id)
+            ->where('status', '!=', Estados::CANCELLED->value)
+            ->where('status', '!=', Estados::REJECTED->value)
+            ->where('status', '!=', Estados::COMPLETED->value)
+            ->where('start_time', '>=', now()->startOfMonth())
+            ->where('start_time', '<=', now()->endOfMonth())
+            ->orderBy('start_time')
+            ->get();
+
+            // Generar disponibilidad base desde horario_semanal
+            $today = now();
+            $disponibilidad = $this->generateMonthlyAvailability($validated['horario_semanal'], $services, $today);
+            $error = 'No sé que poronga es';
+
+            // Ajustar disponibilidad con servicios existentes
+            foreach ($services as $service) {
+                $result = static::updateDisponibilidadPorServicio($service, $disponibilidad);
+                if ($result === false) {
+                    throw new Exception('Error al procesar servicio: ' . $service->id);
+                }
+                $disponibilidad = $result;
+            }
+
             $worker->update([
-                'disponibilidad' => json_encode($validated['disponibilidad']),
+                'horario_semanal' => json_encode($validated['horario_semanal']),
             ]);
 
             $worker->load('user');
 
             return response()->json([
-                'data' => $worker, 'message' => 'Horario actualizado', 'status' => 200
+                'data' => $worker,
+                'message' => 'Horario actualizado',
+                'status' => 200
             ]);
         } catch (Exception $e) {
+            Log::info('Error al actualizar el horario' . $e->getMessage());
             return response()->json([
                 'data' => [],
-                'message' => 'Error al actualizar horario: ' . $e->getMessage(),
+                'message' => 'Error al actualizar horario',
                 'status' => 500
             ], 500);
         }
     }
 
-    public function getHorario($worker) {
+    private function generateMonthlyAvailability(array $horarioSemanal, Collection $services, Carbon $today): array
+    {
+        $disponibilidad = [];
+        $daysInMonth = $today->daysInMonth;
+        $firstDayOfMonth = $today->copy()->startOfMonth()->dayOfWeekIso - 1; // 0 (Lunes) a 6 (Domingo)
+
+        for ($dia = 1; $dia <= $daysInMonth; $dia++) {
+            $dayOfWeekIndex = ($firstDayOfMonth + ($dia - 1)) % 7;
+            $weeklyDay = collect($horarioSemanal)->firstWhere('day', $dayOfWeekIndex);
+            $horas = $weeklyDay['horas'] ?? [null, null];
+
+            // Añadir servicios fuera del horario como excepciones
+            $dayDate = $today->copy()->startOfMonth()->addDays($dia - 1);
+            $dayServices = $services->filter(function ($service) use ($dayDate) {
+                return Carbon::parse($service->start_time)->isSameDay($dayDate);
+            });
+
+            $exceptionHours = [];
+            foreach ($dayServices as $service) {
+                $serviceStart = Carbon::parse($service->start_time)->format('H:i');
+                $serviceEnd = Carbon::parse($service->end_time)->format('H:i');
+                $isCovered = false;
+
+                foreach ($horas as $hour) {
+                    if ($hour === null) continue;
+                    [$hourStart, $hourEnd] = explode('-', $hour);
+                    if ($serviceStart >= $hourStart && $serviceEnd <= $hourEnd) {
+                        $isCovered = true;
+                        break;
+                    }
+                }
+
+                if (!$isCovered) {
+                    $exceptionHours[] = "{$serviceStart}-{$serviceEnd}";
+                }
+            }
+
+            $disponibilidad[] = [
+                'dia' => $dia,
+                'horas' => array_merge(array_slice($horas, 0, 2 - count($exceptionHours)), $exceptionHours)
+            ];
+        }
+
+        return $disponibilidad;
+    }
+
+    /**
+     * Obtiene la disponibilidad y los servicios del trabajador para un mes específico
+     */
+    public function getHorario(string $worker)
+    {
         try {
-            $worker = Worker::findOrFail($worker);
-    
+            $worker = Worker::where('user_id', $worker)->firstOrFail();
+
             return response()->json([
-                'data' => $worker->disponibilidad, 'message' => 'Horario del trabajador', 'status' => 200
+                'data' => $worker->horario_semanal,
+                'message' => 'Horario del trabajador obtenido correctamente',
+                'status' => 200
             ]);
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
                 'message' => 'Error al obtener el horario',
-                'status' => 404
-            ], 404);
+                'status' => 500
+            ], 500);
         }
     }
 

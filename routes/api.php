@@ -16,6 +16,7 @@ Route::post('/logout', [SessionController::class, 'destroy']);
 
 //Users
 Route::get('/users/{user}', [UserController::class, 'show']);
+Route::post('/users/{user}/change-password-authorization', [UserController::class, 'changePasswordAuthorization']);
 
 
 // Clientes
@@ -25,21 +26,25 @@ Route::put('/clients/{client}', [ClientController::class, 'update']);
 Route::delete('/clients/{client}', [ClientController::class, 'destroy']);
 Route::post('/clients/{id}/payment-method', [StripeController::class, 'aniadirMetodoPago']);
 Route::get('/clients/{id}/payment-methods', [StripeController::class, 'obtenerMetodosPago']);
+Route::delete('/clients/{id}/payment-methods', [StripeController::class, 'eliminarMetodoPago']);
 
 // Trabajadores
 Route::get('/workers', [WorkerController::class, 'index']);
 Route::post('/workers', [WorkerController::class, 'store']);
 Route::get('/workers/filter', [WorkerController::class, 'filter']);
-Route::get('/workers/{worker}', [WorkerController::class, 'show']);
+Route::get('/workers/{worker}/schedule', [WorkerController::class, 'getHorario']);
 Route::put('/workers/{worker}/profile', [WorkerController::class, 'updatePerfil']);
 Route::put('/workers/{worker}/schedule', [WorkerController::class, 'updateHorario']);
+Route::get('/workers/{worker}', [WorkerController::class, 'show']);
 Route::delete('/workers/{worker}', [WorkerController::class, 'destroy']);
 
 
 // Manejo de contratos
 Route::get('/services/types', [ServiceController::class, 'serviceTypes']);
+Route::get('/services/{user}/pending', [ServiceController::class, 'index']);
+Route::get('/services/{user}/history', [ServiceController::class, 'historial']);
 Route::get('/services/{service}', [ServiceController::class, 'show']);
-Route::post('/services', [ServiceController::class, 'store']);
-Route::post('/services/pendientes', [ServiceController::class, 'index']);
+Route::put('/services/{service}/confirm-payment', [ServiceController::class, 'actualizarEstadoPago']);
 Route::put('/services/{service}/estado', [ServiceController::class, 'actualizarEstado']);
+Route::post('/services', [ServiceController::class, 'store']);
 Route::put('/services/{service}/valorar', [ServiceController::class, 'valorar']);

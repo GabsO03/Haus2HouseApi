@@ -61,7 +61,7 @@ class SessionController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
-                'message' => 'Error al iniciar sesión: ' . $e->getMessage(),
+                'message' => 'Error al iniciar sesión',
                 'status' => 401,
             ], 401);
         }
@@ -83,7 +83,7 @@ class SessionController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
-                'message' => 'Error al cerrar sesión: ' . $e->getMessage(),
+                'message' => 'Error al cerrar sesión',
                 'status' => 500,
             ], 500);
         }

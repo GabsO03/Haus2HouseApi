@@ -7,7 +7,11 @@ use App\Models\User;
 use App\Models\Worker;
 use App\Models\Service;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 use App\Notifications\ServiceAssignedNotification;
+use App\Notifications\PasswordResetCodeNotification;
 
 class UserController extends Controller
 {
@@ -19,30 +23,6 @@ class UserController extends Controller
     {
         $service->client->user->notify(new ServiceAssignedNotification($service));
         $worker->user->notify(new ServiceAssignedNotification($service));
-    }
-    
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        //
-    }
-
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
-    {
-        //
     }
 
     /**
@@ -65,27 +45,92 @@ class UserController extends Controller
         }
     }
 
+    
     /**
-     * Show the form for editing the specified resource.
+     * Función para mandar un código al email del user en caso
+     * de que la contraseña actual coincida con la que mandó
      */
-    public function edit(string $id)
+    public function changePasswordAuthorization(Request $request, $user)
     {
-        //
+        try {
+            // Validate request
+            $request->validate([
+                'current_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols()],
+                'new_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+            ]);
+
+            $user = User::findOrFail($user);
+
+            $coincide = Hash::check($request->current_password, $user->password);
+
+            if ($coincide) {
+                $user->password = $request->new_password;
+            }
+
+            return response()->json([
+                'data' => $coincide,
+                'status' => 200
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'data' => false,
+                'mensaje' => 'Error al cambiar la contraseña' . $e->getMessage(),
+                'status' => 404
+            ], 404);
+        }
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        //
-    }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
-    {
-        //
-    }
+
+
+    // ESTO ES UN DESCARTE PARA CUANDO QUIERA VERIFICAR EL EMAIL
+    // public function changePasswordAuthorization(Request $request, $user)
+    // {
+    //     try {
+    //         // Validate request
+    //         $request->validate([
+    //             'password' => 'required|string',
+    //         ]);
+
+    //         // Find user
+    //         $user = User::findOrFail($user);
+
+    //         // Check if provided password matches
+    //         if (!Hash::check($request->password, $user->password)) {
+    //             return response()->json([
+    //                 'message' => 'La contraseña actual es incorrecta',
+    //                 'status' => 401
+    //             ], 401);
+    //         }
+
+    //         // Generate random 6-digit code
+    //         $code = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+
+    //         // Store code in password_reset_tokens table
+    //         DB::table('password_reset_tokens')->updateOrInsert(
+    //             ['email' => $user->email],
+    //             [
+    //                 'token' => $code,
+    //                 'created_at' => now()
+    //             ]
+    //         );
+
+    //         // Send notification
+    //         $user->notify(new PasswordResetCodeNotification($code));
+
+    //         return response()->json([
+    //             'message' => 'Código de verificación enviado al correo',
+    //             'status' => 200
+    //         ]);
+
+    //     } catch (Exception $e) {
+    //         return response()->json([
+    //             'message' => 'Error al procesar la solicitud',
+    //             'status' => 500
+    //         ], 500);
+    //     }
+    // }
+
+
 }

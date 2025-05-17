@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use Exception;
+use App\Models\User;
 use Stripe\Customer;
 use App\Models\Client;
 use App\Models\Service;
 use Stripe\StripeClient;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class StripeController extends Controller
 {
@@ -16,7 +18,10 @@ class StripeController extends Controller
     public static function initialize()
     {
         if (!self::$stripe) {
-            self::$stripe = new StripeClient(env('STRIPE_SECRET'));
+            self::$stripe = new StripeClient([
+                'api_key' => env('STRIPE_SECRET'),
+                'stripe_version' => '2023-10-16'
+            ]);
         }
     }
 
@@ -40,25 +45,50 @@ class StripeController extends Controller
     public static function aniadirMetodoPago(Request $request, string $id)
     {
         try {
-            self::initialize();
-            $client = Client::findOrFail($id);
+            Log::info('ID recibido: ' . $id);
 
+            self::initialize();
+            $user = User::with('client')->where('id', $id)->firstOrFail();
+            Log::info('Usuario encontrado: ' . $user->id);
+
+            // Obtener el cliente relacionado
+            $client = $user->client;
+            if (!$client) {
+                throw new Exception('Client not found for user ID: ' . $id);
+            }
+
+            Log::info('Cliente encontrado: ' . $client->id);
+            
             if (!$client->stripe_customer_id) {
+                Log::info('Cliente sin cuenta de Stripe configurada');
+
                 throw new Exception('Cliente sin cuenta de Stripe configurada');
+            }
+
+            // Verificar si ya hay un método de pago y eliminarlo
+            $existingMethods = self::$stripe->paymentMethods->all([
+                'customer' => $client->stripe_customer_id,
+                'type' => 'card',
+            ]);
+            foreach ($existingMethods->data as $method) {
+                self::$stripe->paymentMethods->detach($method->id);
+                Log::info('Método de pago anterior eliminado: ' . $method->id);
             }
 
             // Validar el token de tarjeta (en lugar de datos crudos)
             $validated = $request->validate([
                 'card_token' => 'required|string', // Usamos un token de prueba de Stripe
             ]);
+            Log::info('Card token recibido: ' . $validated['card_token']);
 
             // Crear el método de pago con el token
             $paymentMethod = self::$stripe->paymentMethods->create([
                 'type' => 'card',
                 'card' => [
-                    'token' => $validated['card_token'], // Token de prueba, como tok_visa
+                    'token' => $validated['card_token']
                 ],
             ]);
+            Log::info('Payment method creado: ' . $paymentMethod->id);
 
             // Asociar el método de pago al cliente
             self::$stripe->paymentMethods->attach(
@@ -85,17 +115,22 @@ class StripeController extends Controller
         }
     }
 
-    public static function obtenerMetodosPago(Request $request, string $id)
+    public static function obtenerMetodosPago(string $id)
     {
         try {
             self::initialize();
-            $client = Client::findOrFail($id);
+            $user = User::with('client')->where('id', $id)->firstOrFail();
+            $client = $user->client;
+
+            if (!$client) {
+                throw new Exception('Client not found for user ID: ' . $id);
+            }
 
             if (!$client->stripe_customer_id) {
                 throw new Exception('Cliente sin cuenta de Stripe configurada');
             }
 
-            $paymentMethods = self::$stripe->paymentMethods->list([
+            $paymentMethods = self::$stripe->paymentMethods->all([
                 'customer' => $client->stripe_customer_id,
                 'type' => 'card',
             ]);
@@ -107,6 +142,62 @@ class StripeController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'message' => 'Error al obtener métodos de pago: ' . $e->getMessage(),
+                'status' => 500,
+            ], 500);
+        }
+    }
+
+    public static function eliminarMetodoPago(string $id)
+    {
+        try {
+            Log::info('ID recibido para eliminar método de pago: ' . $id);
+            self::initialize();
+
+            // Buscar el usuario con su cliente
+            $user = User::with('client')->where('id', $id)->firstOrFail();
+            Log::info('Usuario encontrado: ' . $user->id);
+
+            $client = $user->client;
+            if (!$client) {
+                throw new Exception('Client not found for user ID: ' . $id);
+            }
+            Log::info('Cliente encontrado: ' . $client->id);
+
+            if (!$client->stripe_customer_id) {
+                throw new Exception('Cliente sin cuenta de Stripe configurada');
+            }
+
+            // Obtener los métodos de pago actuales
+            $paymentMethods = self::$stripe->paymentMethods->all([
+                'customer' => $client->stripe_customer_id,
+                'type' => 'card',
+            ]);
+
+            if (empty($paymentMethods->data)) {
+                throw new Exception('No hay método de pago para eliminar');
+            }
+
+            // Eliminar el método de pago
+            foreach ($paymentMethods->data as $method) {
+                self::$stripe->paymentMethods->detach($method->id);
+                Log::info('Método de pago eliminado: ' . $method->id);
+            }
+
+            // Opcional: Limpiar el método de pago predeterminado
+            self::$stripe->customers->update($client->stripe_customer_id, [
+                'invoice_settings' => [
+                    'default_payment_method' => null,
+                ],
+            ]);
+
+            return response()->json([
+                'message' => 'Método de pago eliminado',
+                'status' => 200,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Error al eliminar método de pago: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Error al eliminar método de pago: ' . $e->getMessage(),
                 'status' => 500,
             ], 500);
         }

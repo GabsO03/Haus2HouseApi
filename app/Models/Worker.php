@@ -16,6 +16,7 @@ class Worker extends Model
         'dni',
         'bio',
         'services_id',
+        'horario_semanal',
         'disponibilidad',
         'rating',
         'cantidad_ratings',

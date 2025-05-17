@@ -26,7 +26,9 @@ class Service extends Model
         'worker_location',
         'status',
         'total_amount',
-        'payment_stripe_id',
+        'payment_method',
+        'payment_status',
+        'payment_stripe_id', // En caso de que sea con tarjeta
         'client_rating',
         'worker_rating',
         'client_comments',
@@ -65,5 +67,7 @@ class Service extends Model
         'start_time' => 'datetime',
         'end_time' => 'datetime',
         'duration_hours' => 'decimal:2',
+        'payment_method' => 'string',
+        'payment_status' => 'string',
     ];
 }
