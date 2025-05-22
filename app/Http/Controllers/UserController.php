@@ -8,6 +8,7 @@ use App\Models\Worker;
 use App\Models\Service;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rules\Password;
 use App\Notifications\ServiceAssignedNotification;
@@ -53,17 +54,22 @@ class UserController extends Controller
     public function changePasswordAuthorization(Request $request, $user)
     {
         try {
+            Log::info('Inicia el intento de cambio de contraseña');
+            
             // Validate request
             $request->validate([
                 'current_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols()],
                 'new_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
             ]);
 
+            Log::info('Busca al usuario');
             $user = User::findOrFail($user);
 
+            Log::info('Verifica la contraseña');
             $coincide = Hash::check($request->current_password, $user->password);
 
             if ($coincide) {
+                Log::info('Realiza el cambio');
                 $user->password = $request->new_password;
             }
 
@@ -81,8 +87,24 @@ class UserController extends Controller
         }
     }
 
+    public function uploadProfilePhoto(Request $request)
+    {
 
+        if ($request->hasFile('profile_photo')) {
+            $file = $request->file('profile_photo');
+            $fileName = time() . '_' . $_FILES['profile_photo']['name'];
 
+            try {
+                $file->move(public_path('user_pfp'), $fileName);
+                return response()->json($fileName);
+            } catch (\Exception $e) {
+                return response()->json(['error' => 'Error al guardar el archivo'], 500);
+            }
+        } else {
+            return response()->json(['error' => 'No file uploaded'], 400);
+        }
+
+    }
 
     // ESTO ES UN DESCARTE PARA CUANDO QUIERA VERIFICAR EL EMAIL
     // public function changePasswordAuthorization(Request $request, $user)

@@ -44,14 +44,16 @@ class ClientController extends Controller
                     $query->whereNotNull('worker_comments')
                           ->whereNotNull('worker_rating')
                           ->with(['worker.user' => function ($query) {
-                              $query->select('id', 'nombre');
+                            $query->select('id', 'nombre', 'profile_photo');
                           }]);
                 }
             ])->where('user_id', $id)->firstOrFail();
 
             $comments = $client_comments->services->map(function ($service) {
                 return [
+                    'worker_id' => $service->worker->user_id,
                     'worker_name' => $service->worker->user->nombre,
+                    'worker_pfp' => $service->worker->user->profile_photo,
                     'worker_rating' => $service->worker_rating,
                     'worker_comments' => $service->worker_comments,
                     'service_id' => $service->id,
@@ -83,7 +85,7 @@ class ClientController extends Controller
     public function update(Request $request, string $id)
     {
         try {
-            $client = Client::findOrFail($id);
+            $client = Client::where('user_id', $id)->firstOrFail();
             $user = $client->user;
 
             $validated = $request->validate([
@@ -92,18 +94,10 @@ class ClientController extends Controller
                 'password' => 'nullable|string|min:8',
                 'telefono' => 'nullable|string|max:20',
                 'direccion' => 'nullable|string|max:255',
-                'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+                'profile_photo' => 'nullable|string',
+                'lat' => 'required|numeric',
+                'lng' => 'required|numeric',
             ]);
-
-            // Solo actualiza la foto de perfil si se subió una nueva
-            $profilePhotoPath = $user->profile_photo;
-
-            if ($request->hasFile('profile_photo') && $request->file('profile_photo')->isValid()) {
-                if ($user->profile_photo) {
-                    Storage::disk('public')->delete($user->profile_photo);
-                }
-                $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-            }
 
             $user->update([
                 'nombre' => $validated['nombre'],
@@ -111,7 +105,9 @@ class ClientController extends Controller
                 'password' => isset($validated['password']) ? bcrypt($validated['password']) : $user->password,
                 'telefono' => $validated['telefono'] ?? $user->telefono,
                 'direccion' => $validated['direccion'] ?? $user->direccion,
-                'profile_photo' => $profilePhotoPath,
+                'profile_photo' => $validated['profile_photo'],
+                'latitude' => $request->lat,
+                'longitude' => $request->lng,
             ]);
 
             $client->load('user');

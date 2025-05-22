@@ -8,6 +8,12 @@ use App\Http\Controllers\WorkerController;
 use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\StripeController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\Maps\GeocodeController;
+
+
+// Ubicacion
+Route::get('/geocode', [GeocodeController::class, 'geocode']);
+Route::get('/reverse-geocode', [GeocodeController::class, 'reverseGeocode']);
 
 // Registro y login
 Route::post('/register', [RegisterController::class, 'store']);
@@ -17,7 +23,7 @@ Route::post('/logout', [SessionController::class, 'destroy']);
 //Users
 Route::get('/users/{user}', [UserController::class, 'show']);
 Route::post('/users/{user}/change-password-authorization', [UserController::class, 'changePasswordAuthorization']);
-
+Route::post('/upload-profile-photo', [UserController::class, 'uploadProfilePhoto']);
 
 // Clientes
 Route::get('/clients', [ClientController::class, 'index']);
@@ -32,6 +38,7 @@ Route::delete('/clients/{id}/payment-methods', [StripeController::class, 'elimin
 Route::get('/workers', [WorkerController::class, 'index']);
 Route::post('/workers', [WorkerController::class, 'store']);
 Route::get('/workers/filter', [WorkerController::class, 'filter']);
+Route::get('/workers/{worker}/toggleActive', [WorkerController::class, 'toggleWorkerActivo']);
 Route::get('/workers/{worker}/schedule', [WorkerController::class, 'getHorario']);
 Route::put('/workers/{worker}/profile', [WorkerController::class, 'updatePerfil']);
 Route::put('/workers/{worker}/schedule', [WorkerController::class, 'updateHorario']);

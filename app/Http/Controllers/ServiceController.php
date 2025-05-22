@@ -67,9 +67,12 @@ class ServiceController extends Controller
     public function store(Request $request)
     {
         try {
-            // Recojo los datos para asginar un trabajador de acuerdo a los requisitos
+            Log::info('Starting store function for service creation', ['request' => $request->all()]);
+
+            // 1: Validar los datos que llegan
+            Log::info('Validating request data');
             $validated = $request->validate([
-                'client_id' => 'required|exists:users,id',
+                'client_id' => 'required|exists:users,id', // En realidad aquí recibe el id del user
                 'service_type_id' => 'required|exists:service_types,id',
                 'description' => 'nullable|string|max:255',
                 'specifications' => 'nullable|string|max:255',
@@ -78,11 +81,14 @@ class ServiceController extends Controller
                     'required',
                     'date',
                     'after:request_time',
-                    // No más de un mes desde request_time
                     function ($attribute, $value, $fail) use ($request) {
                         $requestTime = Carbon::parse($request->request_time);
                         $startTime = Carbon::parse($value);
                         if ($startTime->gt($requestTime->addMonth())) {
+                            Log::warning('Start time validation failed: Start time is more than a month after request time', [
+                                'start_time' => $value,
+                                'request_time' => $request->request_time
+                            ]);
                             $fail('El inicio del servicio no puede ser posterior a un mes desde la solicitud.');
                         }
                     },
@@ -91,11 +97,14 @@ class ServiceController extends Controller
                     'required',
                     'date',
                     'after:start_time',
-                    // Mismo día que start_time
                     function ($attribute, $value, $fail) use ($request) {
                         $startTime = Carbon::parse($request->start_time);
                         $endTime = Carbon::parse($value);
                         if (!$endTime->isSameDay($startTime)) {
+                            Log::warning('End time validation failed: End time is not on the same day as start time', [
+                                'end_time' => $value,
+                                'start_time' => $request->start_time
+                            ]);
                             $fail('El fin del servicio debe ser el mismo día que el inicio.');
                         }
                     },
@@ -104,21 +113,37 @@ class ServiceController extends Controller
                 'total_amount' => 'required|numeric|min:0',
                 'payment_method' => 'required|string',
             ]);
+            Log::info('Request data validated successfully', ['validated' => $validated]);
 
-            // Lo asigno
+            // 2: Asignar un trabajador
+            Log::info('Attempting to find a worker for the service');
             $worker = WorkerController::encontrarWorker($validated);
-
-            if (!$worker) { // En caso que no haya un trabajador disponible
+            if (!$worker) {
+                Log::warning('No worker available for the service', ['validated' => $validated]);
                 return response()->json([
                     'data' => [],
                     'message' => 'No hay trabajadores disponibles',
                     'status' => 400
                 ], 400);
             }
+            Log::info('Worker found', ['worker_id' => $worker->id]);
 
-            $client_id = Client::where('user_id', $validated['client_id'])->first()->id;
-            
-            // Finalmente creo el servicio, los últimos campos se llenarán al terminarlo
+            // 3: Conseguir  el id del cliente
+            Log::info('Fetching client ID for user', ['user_id' => $validated['client_id']]);
+            $client = Client::where('user_id', $validated['client_id'])->first();
+            if (!$client) {
+                Log::error('Client not found for user_id', ['user_id' => $validated['client_id']]);
+                return response()->json([
+                    'data' => [],
+                    'message' => 'Cliente no encontrado',
+                    'status' => 404
+                ], 404);
+            }
+            $client_id = $client->id;
+            Log::info('Client ID retrieved', ['client_id' => $client_id]);
+
+            // 4: Crear el servicio
+            Log::info('Creating new service record');
             $service = Service::create([
                 'client_id' => $client_id,
                 'worker_id' => $worker->id,
@@ -142,23 +167,35 @@ class ServiceController extends Controller
                 'worker_comments' => null,
                 'incident_report' => null,
             ]);
+            Log::info('Service created successfully', ['service_id' => $service->id]);
 
-            // Una vez ya asignado se les manda una notificacion a ambas partes para que esten pendientes
+            // 5: Notify users
+            Log::info('Notifying users about the service assignment', ['service_id' => $service->id, 'worker_id' => $worker->id]);
             UserController::notifyUsers($service, $worker);
+            Log::info('Users notified successfully');
 
-
-            // Cargo el objeto con los demás a traves de sus relaciones
+            // 6: Cargar las relaciones
+            Log::info('Loading service relationships');
             $service->load('client.user', 'worker.user', 'serviceType');
+            Log::info('Relationships loaded', ['service_id' => $service->id]);
 
+            // 7: Devolver los datos
+            Log::info('Returning success response');
             return response()->json([
                 'data' => $service,
                 'message' => 'Servicio creado y trabajador asignado',
                 'status' => 201
             ], 201);
         } catch (Exception $e) {
+            Log::error('Error in store function', [
+                'error_message' => $e->getMessage(),
+                'error_line' => $e->getLine(),
+                'error_file' => $e->getFile(),
+                'request' => $request->all()
+            ]);
             return response()->json([
                 'data' => [],
-                'message' => 'Error al crear servicio',
+                'message' => 'Error al crear servicio: ' . $e->getMessage(),
                 'status' => 500
             ], 500);
         }
@@ -353,15 +390,7 @@ class ServiceController extends Controller
                     }
 
                     
-                    if ($nuevoEstado === Estados::COMPLETED && $service->payment_status == 'pagado') {
-
-                        $service->end_time = now();
-                        $startTime = new DateTime($service->start_time);
-                        $endTime = new DateTime($service->end_time);
-                        $interval = $startTime->diff($endTime);
-                        $service->duration_hours = $interval->h + ($interval->i / 60);
-                    
-                    } elseif ($nuevoEstado === Estados::CANCELLED) {
+                    if ($nuevoEstado === Estados::CANCELLED) {
 
                         $this->cancelarServicio($service);
                         return response()->json([
@@ -418,31 +447,19 @@ class ServiceController extends Controller
 
             $service = Service::findOrFail($service);
 
-            if ($service->payment_method != 'Efectivo') {
-                return response()->json([
-                    'data' => $service,
-                    'message' => 'Pago equivocado',
-                    'status' => 400
-                ]);
+            if ($service->payment_method != 'cash') {
+                throw new Exception('Tipo pago equivocado', 400);
             }
 
-            if ($service->status->value == Estados::IN_PROGRESS->value) {
-                return response()->json([
-                    'data' => $service,
-                    'message' => 'Espere que el servicio empiece',
-                    'status' => 400
-                ]);
+            if ($service->status->value != Estados::IN_PROGRESS->value) {
+                throw new Exception('Espere que el servicio empiece', 400);
             }
 
             if ($request->status == 'pagado' && $service->payment_status != 'emitido') {
-                return response()->json([
-                    'data' => $service,
-                    'message' => 'Espere que el servicio empiece',
-                    'status' => 400
-                ]);
+                throw new Exception('Debe haber un pago primero', 400);
             }
 
-            $service->payment_status = 'pagado';
+            $service->payment_status = $request->status;
             $service->save();
 
             return response()->json([
@@ -453,9 +470,9 @@ class ServiceController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'data' => [],
-                'message' => 'Error al confirmar el pago del servicio',
-                'status' => 500
-            ], 500);
+                'message' => $e->getMessage() ?? 'Error al confirmar el pago del servicio',
+                'status' => $e->getCode() ?? 500
+            ], $e->getCode() ?? 500);
         }
     }
 

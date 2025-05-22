@@ -107,13 +107,15 @@ class WorkerController extends Controller
                     $query->whereNotNull('client_comments')
                           ->whereNotNull('client_rating')
                           ->with(['client.user' => function ($query) {
-                              $query->select('id', 'nombre');
+                            $query->select('id', 'nombre', 'profile_photo');
                           }]);
                 }
             ])->where('user_id', $id)->firstOrFail();
 
             $comments = $worker_comments->services->map(function ($service) {
                 return [
+                    'client_id' => $service->client->user_id,
+                    'client_pfp' => $service->client->user->profile_photo,
                     'client_name' => $service->client->user->nombre,
                     'client_rating' => $service->client_rating,
                     'client_comments' => $service->client_comments,
@@ -160,15 +162,12 @@ class WorkerController extends Controller
                                 ->fromRaw('workers as w')
                                 ->whereColumn('w.id', 'workers.id')
                                 ->whereRaw("jsonb_typeof(w.services_id) = 'array'")
-                                ->whereRaw("EXISTS (SELECT 1 FROM jsonb_array_elements_text(w.services_id) as elem WHERE UPPER(elem) LIKE UPPER(?))", ["%{$filter}%"]);
-                        })
-                        ->orWhere(function ($subSubQuery) use ($filter) {
-                            if (is_numeric($filter)) {
-                                $subSubQuery->where('rating', '>=', floatval($filter));
-                            }
+                                ->whereRaw("EXISTS (SELECT 1 FROM jsonb_array_elements_text(w.services_id) as elem WHERE ? ~ '^[0-9]+$' AND elem = ?)",
+                                [$filter, $filter]);
                         })
                         ->orWhereHas('user', function ($subSubQuery) use ($filter) {
-                            $subSubQuery->where('nombre', 'ILIKE', "%{$filter}%"); // ILIKE es case-insensitive en PostgreSQL
+                            $subSubQuery->where('nombre', 'ILIKE', "%{$filter}%")
+                                        ->orWhere('email', 'ILIKE', "%{$filter}%");
                         });
                     });
                 }
@@ -193,30 +192,74 @@ class WorkerController extends Controller
     /**
      * Busca un trabajador disponible según habilidades y disponibilidad
      */
-    public static function encontrarWorker(array $validated, string $previousWorkerId = null) // Ese id por si el primero lo cancela, así no se le asigna de nuevo
+    public static function encontrarWorker(array $validated, string $previousWorkerId = null)
     {
-        $startTime = Carbon::parse($validated['start_time'])->setTimezone('UTC');
-        $dayOfMonth = $startTime->day; // Ejemplo: 19
-        $startHour = $startTime->format('H:i'); // Ejemplo: 08:00
+        try {
+            Log::info('Desde encontrarWorker: Starting worker search', [
+                'validated' => $validated,
+                'previousWorkerId' => $previousWorkerId
+            ]);
 
-        // Busco un trabajador que se dedique a lo que pide la solicitud y que este disponible en ese momento
-        $query = Worker::where('active', true)
-            ->whereRaw("services_id @> ?", [json_encode([$validated['service_type_id']])])
-            ->whereRaw("EXISTS (
-                SELECT 1
-                FROM jsonb_array_elements(disponibilidad) AS d,
-                    jsonb_array_elements(d->'horas') AS h(hora)
-                WHERE (d->>'dia')::int = ?
-                AND ?::time BETWEEN split_part(h.hora #>> '{}', '-', 1)::time AND split_part(h.hora #>> '{}', '-', 2)::time
-            )", [$dayOfMonth, $startHour]);
+            // 1: Parsear la hora de inicio y obtener el día y la hora
+            Log::info('Desde encontrarWorker: Parsing start time and extracting day and hour', [
+                'start_time' => $validated['start_time']
+            ]);
+            $startTime = Carbon::parse($validated['start_time'])->setTimezone('UTC');
+            $dayOfMonth = $startTime->day; // Ejemplo: 19
+            $startHour = $startTime->format('H:i'); // Ejemplo: 08:00
+            Log::info('Desde encontrarWorker: Start time parsed', [
+                'dayOfMonth' => $dayOfMonth,
+                'startHour' => $startHour
+            ]);
 
-        if ($previousWorkerId != null) {
-            $query->where('id', '!=', $previousWorkerId); // Para que no sea al trabajador que canceló
+            // 2: Construir la consulta base para buscar trabajadores
+            Log::info('Desde encontrarWorker: Building worker query');
+            $query = Worker::where('active', true)
+                ->whereRaw("services_id @> ?", [json_encode([$validated['service_type_id']])])
+                ->whereRaw("EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(disponibilidad) AS d,
+                        jsonb_array_elements(d->'horas') AS h(hora)
+                    WHERE (d->>'dia')::int = ?
+                    AND ?::time BETWEEN split_part(h.hora #>> '{}', '-', 1)::time AND split_part(h.hora #>> '{}', '-', 2)::time
+                )", [$dayOfMonth, $startHour]);
+
+            // 3: Excluir al trabajador anterior si aplica
+            if ($previousWorkerId != null) {
+                Log::info('Desde encontrarWorker: Excluding previous worker', ['previousWorkerId' => $previousWorkerId]);
+                $query->where('id', '!=', $previousWorkerId);
+            }
+
+            // 4: Ejecutar la consulta
+            Log::info('Desde encontrarWorker: Executing query to find worker');
+            $trabajadorEncontrado = $query->first();
+
+            // 5: Registrar el resultado
+            if ($trabajadorEncontrado) {
+                Log::info('Desde encontrarWorker: Worker found', [
+                    'worker_id' => $trabajadorEncontrado->id,
+                    'worker_data' => $trabajadorEncontrado->toArray()
+                ]);
+            } else {
+                Log::warning('Desde encontrarWorker: No worker found matching criteria', [
+                    'service_type_id' => $validated['service_type_id'],
+                    'dayOfMonth' => $dayOfMonth,
+                    'startHour' => $startHour,
+                    'previousWorkerId' => $previousWorkerId
+                ]);
+            }
+
+            return $trabajadorEncontrado;
+        } catch (Exception $e) {
+            Log::error('Desde encontrarWorker: Error in worker search', [
+                'error_message' => $e->getMessage(),
+                'error_line' => $e->getLine(),
+                'error_file' => $e->getFile(),
+                'validated' => $validated,
+                'previousWorkerId' => $previousWorkerId
+            ]);
+            return null;
         }
-
-        $trabajadorEncontrado = $query->first();
-
-        return $trabajadorEncontrado;
     }
 
     /**
@@ -319,79 +362,77 @@ class WorkerController extends Controller
             $worker = Worker::where('user_id', $worker)->firstOrFail();
             $user = $worker->user;
 
-            // Extraer datos manualmente
-            $nombre = $request->input('nombre');
-            $email = $request->input('email');
-            $telefono = $request->input('telefono', '');
-            $direccion = $request->input('direccion', '');
-            $dni = $request->input('dni');
-            $services_id = $request->input('services_id');
-            $bio = $request->input('bio', '');
-            $active = $request->input('active', '0') === '1';
-            $profile_photo = $request->file('profile_photo');
+            // Validar los datos del JSON
+            $validated = $request->validate([
+                'nombre' => 'required|string|min:3',
+                'email' => 'required|email',
+                'telefono' => 'nullable|string|max:20',
+                'direccion' => 'nullable|string|max:255',
+                'dni' => 'required|string|regex:/^\d{8}[A-Z]$/',
+                'services_id' => 'required|array',
+                'bio' => 'nullable|string',
+                'active' => 'required|in:0,1',
+                'profile_photo' => 'nullable|string',
+                'lat' => 'required|numeric',
+                'lng' => 'required|numeric',
+            ]);
+            
 
-            // Verificar qué datos están llegando
-            $received_data = [
-                'nombre' => $nombre,
-                'email' => $email,
-                'telefono' => $telefono,
-                'direccion' => $direccion,
-                'dni' => $dni,
-                'services_id' => $services_id,
-                'bio' => $bio,
-                'active' => $active,
-                'profile_photo' => $profile_photo ? 'File present' : 'No file'
-            ];
-
-            // Si los campos requeridos no están presentes, devolver un error con los datos recibidos
-            if (empty($nombre) || empty($email) || empty($dni) || empty($services_id)) {
-                return response()->json([
-                    'data' => [],
-                    'message' => 'Campos requeridos faltantes. Datos recibidos: ' . json_encode($received_data),
-                    'status' => 422
-                ], 422);
-            }
-
-            // Validar el formato del email
-            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                return response()->json([
-                    'data' => [],
-                    'message' => 'El email no es válido.',
-                    'status' => 422
-                ], 422);
-            }
-
-            // Manejar la foto de perfil
-            $profilePhotoPath = $user->profile_photo;
-            if ($profile_photo && $profile_photo->isValid()) {
-                if ($user->profile_photo) {
-                    Storage::disk('public')->delete($user->profile_photo);
-                }
-                $profilePhotoPath = $profile_photo->store('profile_photos', 'public');
-            }
-
-            // Actualizar el usuario
             $user->update([
-                'nombre' => $nombre,
-                'email' => $email,
-                'telefono' => $telefono,
-                'direccion' => $direccion,
-                'profile_photo' => $profilePhotoPath,
+                'nombre' => $validated['nombre'],
+                'email' => $validated['email'],
+                'telefono' => $validated['telefono'] ?? '',
+                'direccion' => $validated['direccion'] ?? '',
+                'profile_photo' => $validated['profile_photo'] ?? null,
+                'latitude' => $request->lat,
+                'longitude' => $request->lng,
             ]);
 
             // Actualizar el trabajador
             $worker->update([
-                'dni' => $dni,
-                'services_id' => $services_id,
-                'bio' => $bio,
-                'active' => $active,
+                'dni' => $validated['dni'],
+                'services_id' => json_encode($validated['services_id']), // Guardar como JSON
+                'bio' => $validated['bio'] ?? '',
+                'active' => $validated['active'],
             ]);
 
+            $worker = Worker::where('user_id', $worker->user_id)->with('user')->first();
             $worker->load('user');
 
             return response()->json([
                 'data' => $worker,
                 'message' => 'Perfil actualizado',
+                'status' => 200
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al actualizar perfil: ' . $e->getMessage(),
+                'status' => 500
+            ], 500);
+        }
+    }
+
+    public function toggleWorkerActivo($worker)
+    {
+        try {
+            // Buscar el trabajador
+            $worker = Worker::where('user_id', $worker)->firstOrFail();
+
+            // Cambiar el estado activo (toggle)
+            $newStatus = !$worker->active;
+
+            // Actualizar el trabajador
+            $worker->update([
+                'active' => $newStatus
+            ]);
+
+            // Recargar el trabajador con la relación user
+            $worker = Worker::where('user_id', $worker->user_id)->with('user')->first();
+
+            return response()->json([
+                'data' => $worker,
+                'message' => $newStatus ? 'Trabajador activado correctamente' : 'Trabajador desactivado correctamente',
                 'status' => 200
             ]);
         } catch (\Exception $e) {

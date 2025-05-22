@@ -3,7 +3,6 @@
 namespace Database\Factories;
 
 use Illuminate\Database\Eloquent\Factories\Factory;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
 /**
@@ -11,34 +10,30 @@ use Illuminate\Support\Str;
  */
 class UserFactory extends Factory
 {
-    /**
-     * The current password being used by the factory.
-     */
-    protected static ?string $password;
-
-    /**
-     * Define the model's default state.
-     *
-     * @return array<string, mixed>
-     */
     public function definition(): array
     {
-        return [
-            'name' => fake()->name(),
-            'email' => fake()->unique()->safeEmail(),
-            'email_verified_at' => now(),
-            'password' => static::$password ??= Hash::make('password'),
-            'remember_token' => Str::random(10),
-        ];
-    }
+        // Centro en Jaén, Jaén (España)
+        $baseLat = 37.7692;
+        $baseLng = -3.7875;
+        // Radio de 20 km (aprox. 0.18 grados)
+        $radius = 0.18;
 
-    /**
-     * Indicate that the model's email address should be unverified.
-     */
-    public function unverified(): static
-    {
-        return $this->state(fn (array $attributes) => [
-            'email_verified_at' => null,
-        ]);
+        // Generar coordenadas aleatorias dentro del radio
+        $angle = rand(0, 360) * pi() / 180; // Ángulo aleatorio en radianes
+        $distance = sqrt(rand(0, 10000) / 10000) * $radius; // Distancia aleatoria
+        $lat = $baseLat + ($distance * cos($angle));
+        $lng = $baseLng + ($distance * sin($angle));
+
+        return [
+            'id' => (string) Str::uuid(),
+            'nombre' => $this->faker->name(),
+            'email' => $this->faker->unique()->safeEmail(),
+            'password' => 'Usu1234-', // Sin Hash::make, el modelo lo hashea
+            'rol' => 'worker',
+            'latitude' => $lat,
+            'longitude' => $lng,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
     }
 }

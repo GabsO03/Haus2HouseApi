@@ -33,6 +33,8 @@ class User extends Authenticatable
         'profile_photo',
         'telefono',
         'direccion',
+        'latitude',
+        'longitude',
     ];
 
     protected function password(): Attribute
@@ -67,10 +69,10 @@ class User extends Authenticatable
      *
      * @var list<string>
      */
-    // protected $hidden = [
-    //     'password',
-    //     'remember_token',
-    // ];
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
 
     // /**
     //  * Get the attributes that should be cast.
