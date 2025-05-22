@@ -53,7 +53,7 @@ class WorkerController extends Controller
                 'dni' => 'required|string|unique:workers,dni',
                 'services_id' => 'required|array',
                 'horario_semanal' => 'required|array|size:7',
-                'horario_semanal.*.day' => 'required|integer|min:0|max:6',
+                'horario_semanal.*.dia' => 'required|integer|min:0|max:6',
                 'horario_semanal.*.horas' => 'required|array|size:2',
                 'horario_semanal.*.horas.*' => 'nullable|string',
                 'bio' => 'nullable|string',
@@ -455,7 +455,7 @@ class WorkerController extends Controller
 
             $validated = $request->validate([
                 'horario_semanal' => 'required|array|size:7',
-                'horario_semanal.*.day' => 'required|integer|min:0|max:6',
+                'horario_semanal.*.dia' => 'required|integer|min:0|max:6',
                 'horario_semanal.*.horas' => 'required|array|size:2',
                 'horario_semanal.*.horas.*' => 'nullable|string'
             ]);
@@ -472,7 +472,6 @@ class WorkerController extends Controller
             // Generar disponibilidad base desde horario_semanal
             $today = now();
             $disponibilidad = $this->generateMonthlyAvailability($validated['horario_semanal'], $services, $today);
-            $error = 'No sé que poronga es';
 
             // Ajustar disponibilidad con servicios existentes
             foreach ($services as $service) {
@@ -512,7 +511,7 @@ class WorkerController extends Controller
 
         for ($dia = 1; $dia <= $daysInMonth; $dia++) {
             $dayOfWeekIndex = ($firstDayOfMonth + ($dia - 1)) % 7;
-            $weeklyDay = collect($horarioSemanal)->firstWhere('day', $dayOfWeekIndex);
+            $weeklyDay = collect($horarioSemanal)->firstWhere('dia', $dayOfWeekIndex);
             $horas = $weeklyDay['horas'] ?? [null, null];
 
             // Añadir servicios fuera del horario como excepciones
