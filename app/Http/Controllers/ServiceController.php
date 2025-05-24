@@ -209,23 +209,34 @@ class ServiceController extends Controller
         $user = User::findOrFail($user_id);
         $worker_client = null;
 
-        if ($user->rol === 'worker') {
-            $worker_client = Worker::with('user')->where('user_id', $user_id)->firstOrFail();
-        } else {
-            $worker_client = Client::with('user')->where('user_id', $user_id)->firstOrFail();            
-        }
-        
         try {
-            $services = Service::where(function ($query) use ($worker_client) {
-                $query->where('worker_id', $worker_client->id)
-                      ->orWhere('client_id', $worker_client->id);
-            })
-            ->where('status', '!=', Estados::CANCELLED->value)
-            ->where('status', '!=', Estados::REJECTED->value)
-            ->where('status', '!=', Estados::COMPLETED->value)
-            ->with('client.user', 'worker.user', 'serviceType')
-            ->orderBy('start_time')
-            ->get();
+            $services = [];
+
+            if ($user->rol === 'admin') {
+                $services = Service::where('status', '!=', Estados::CANCELLED->value)
+                    ->where('status', '!=', Estados::REJECTED->value)
+                    ->where('status', '!=', Estados::COMPLETED->value)
+                    ->with('client.user', 'worker.user', 'serviceType')
+                    ->orderBy('start_time')
+                    ->get();
+            } else {
+                if ($user->rol === 'worker') {
+                    $worker_client = Worker::with('user')->where('user_id', $user_id)->firstOrFail();
+                } elseif ($user->rol === 'client') {
+                    $worker_client = Client::with('user')->where('user_id', $user_id)->firstOrFail();            
+                }
+                
+                $services = Service::where(function ($query) use ($worker_client) {
+                        $query->where('worker_id', $worker_client->id)
+                            ->orWhere('client_id', $worker_client->id);
+                    })
+                    ->where('status', '!=', Estados::CANCELLED->value)
+                    ->where('status', '!=', Estados::REJECTED->value)
+                    ->where('status', '!=', Estados::COMPLETED->value)
+                    ->with('client.user', 'worker.user', 'serviceType')
+                    ->orderBy('start_time')
+                    ->get();
+            }
 
             return response()->json([
                 'data' => $services,
@@ -246,25 +257,36 @@ class ServiceController extends Controller
         $user = User::findOrFail($user_id);
         $worker_client = null;
 
-        if ($user->rol === 'worker') {
-            $worker_client = Worker::with('user')->where('user_id', $user_id)->firstOrFail();
-        } else {
-            $worker_client = Client::with('user')->where('user_id', $user_id)->firstOrFail();            
-        }
-        
         try {
-            $services = Service::where(function ($query) use ($worker_client) {
-                $query->where('worker_id', $worker_client->id)
-                    ->orWhere('client_id', $worker_client->id);
-            })
-            ->where(function ($query) {
-                $query->where('status', Estados::CANCELLED->value)
-                    ->orWhere('status', Estados::REJECTED->value)
-                    ->orWhere('status', Estados::COMPLETED->value);
-            })
-            ->with('client.user', 'worker.user', 'serviceType')
-            ->orderBy('start_time')
-            ->get();
+            if ($user->rol === 'admin') {
+                $services = Service::where(function ($query) {
+                        $query->where('status', Estados::CANCELLED->value)
+                            ->orWhere('status', Estados::REJECTED->value)
+                            ->orWhere('status', Estados::COMPLETED->value);
+                    })
+                    ->with('client.user', 'worker.user', 'serviceType')
+                    ->orderBy('start_time')
+                    ->get();
+            } else {
+                if ($user->rol === 'worker') {
+                    $worker_client = Worker::with('user')->where('user_id', $user_id)->firstOrFail();
+                } else {
+                    $worker_client = Client::with('user')->where('user_id', $user_id)->firstOrFail();            
+                }
+                
+                $services = Service::where(function ($query) use ($worker_client) {
+                        $query->where('worker_id', $worker_client->id)
+                            ->orWhere('client_id', $worker_client->id);
+                    })
+                    ->where(function ($query) {
+                        $query->where('status', Estados::CANCELLED->value)
+                            ->orWhere('status', Estados::REJECTED->value)
+                            ->orWhere('status', Estados::COMPLETED->value);
+                    })
+                    ->with('client.user', 'worker.user', 'serviceType')
+                    ->orderBy('start_time')
+        ->get();
+}
 
             return response()->json([
                 'data' => $services,

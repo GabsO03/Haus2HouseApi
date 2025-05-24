@@ -1,13 +1,14 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\RegisterController;
-use App\Http\Controllers\SessionController;
+use App\Http\Controllers\UserController;
 use App\Http\Controllers\ClientController;
+use App\Http\Controllers\StripeController;
 use App\Http\Controllers\WorkerController;
 use App\Http\Controllers\ServiceController;
-use App\Http\Controllers\StripeController;
-use App\Http\Controllers\UserController;
+use App\Http\Controllers\SessionController;
+use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\Maps\GeocodeController;
 
 

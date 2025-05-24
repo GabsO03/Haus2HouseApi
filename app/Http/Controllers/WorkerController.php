@@ -49,13 +49,9 @@ class WorkerController extends Controller
             $validated = $request->validate([
                 'nombre' => 'required|string|max:255',
                 'email' => 'required|email|unique:users,email',
-                'password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+                'password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols()],
                 'dni' => 'required|string|unique:workers,dni',
                 'services_id' => 'required|array',
-                'horario_semanal' => 'required|array|size:7',
-                'horario_semanal.*.dia' => 'required|integer|min:0|max:6',
-                'horario_semanal.*.horas' => 'required|array|size:2',
-                'horario_semanal.*.horas.*' => 'nullable|string',
                 'bio' => 'nullable|string',
                 'active' => 'nullable|boolean',
             ]);
@@ -67,14 +63,10 @@ class WorkerController extends Controller
                 'rol' => 'worker',
             ]);
 
-            $disponibilidad = $this->generateMonthlyAvailability($validated['horario_semanal'], collect([]), now());
-
             $worker = Worker::create([
                 'user_id' => $user->id,
                 'dni' => $validated['dni'],
                 'services_id' => json_encode($validated['services_id']),
-                'horario_semanal' => json_encode($validated['horario_semanal']),
-                'disponibilidad' => json_encode($disponibilidad),
                 'bio' => $validated['bio'],
                 'active' => $validated['active'] ?? false,
                 'rating' => 0.00,
