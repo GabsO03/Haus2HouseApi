@@ -54,23 +54,18 @@ class UserController extends Controller
     public function changePasswordAuthorization(Request $request, $user)
     {
         try {
-            Log::info('Inicia el intento de cambio de contraseña');
-            
             // Validate request
             $request->validate([
-                'current_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols()],
+                'current_password' => ['required'],
                 'new_password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
             ]);
 
-            Log::info('Busca al usuario');
             $user = User::findOrFail($user);
 
-            Log::info('Verifica la contraseña');
             $coincide = Hash::check($request->current_password, $user->password);
 
             if ($coincide) {
-                Log::info('Realiza el cambio');
-                $user->password = $request->new_password;
+                $user->update(['password' => $request->new_password]);
             }
 
             return response()->json([
@@ -107,7 +102,7 @@ class UserController extends Controller
     }
 
     // ESTO ES UN DESCARTE PARA CUANDO QUIERA VERIFICAR EL EMAIL
-    // public function changePasswordAuthorization(Request $request, $user)
+    // public function verifyEmail(Request $request, $user)
     // {
     //     try {
     //         // Validate request
