@@ -25,6 +25,7 @@ Route::post('/logout', [SessionController::class, 'destroy']);
 Route::get('/users/{user}', [UserController::class, 'show']);
 Route::post('/users/{user}/change-password-authorization', [UserController::class, 'changePasswordAuthorization']);
 Route::post('/upload-profile-photo', [UserController::class, 'uploadProfilePhoto']);
+Route::get('/proxy-image/{fileId}', [UserController::class, 'getProfilePhoto']);
 
 // Clientes
 Route::get('/clients', [ClientController::class, 'index']);

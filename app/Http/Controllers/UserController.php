@@ -3,16 +3,19 @@
 namespace App\Http\Controllers;
 
 use Exception;
+use Google\Client;
 use App\Models\User;
 use App\Models\Worker;
 use App\Models\Service;
+use Google\Service\Drive;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Google\Service\Drive\DriveFile;
 use Illuminate\Support\Facades\Log;
+use Google\Service\Drive\Permission;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\Rules\Password;
 use App\Notifications\ServiceAssignedNotification;
-use App\Notifications\PasswordResetCodeNotification;
 
 class UserController extends Controller
 {
@@ -82,72 +85,73 @@ class UserController extends Controller
         }
     }
 
+    public static function deleteProfilePhoto($fileId)
+    {
+        try {
+            $client = new Client();
+            $client->setApplicationName('Haus2HouseApi');
+            $client->setScopes([Drive::DRIVE_FILE]);
+            $client->setAuthConfig(storage_path('app/credentials.json'));
+            $client->setAccessType('offline');
+
+            $service = new Drive($client);
+
+            // Borra el archivo usando el file_id
+            $service->files->delete($fileId);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Error al eliminar foto de Google Drive: ' . $e->getMessage());
+            return false;
+        }
+    }
+
     public function uploadProfilePhoto(Request $request)
     {
-
         if ($request->hasFile('profile_photo')) {
             $file = $request->file('profile_photo');
-            $fileName = time() . '_' . $_FILES['profile_photo']['name'];
+            $fileName = time() . '_' . $file->getClientOriginalName();
 
             try {
-                $file->move(public_path('user_pfp'), $fileName);
-                return response()->json($fileName);
+                $client = new Client();
+                $client->setApplicationName('Haus2HouseApi');
+                $client->setScopes([Drive::DRIVE_FILE]);
+                $client->setAuthConfig(storage_path('app/credentials.json'));
+                $client->setAccessType('offline');
+
+                $service = new Drive($client);
+
+                $driveFile = new DriveFile();
+                $driveFile->setName($fileName);
+                $driveFile->setParents([env('GOOGLE_DRIVE_ID')]);
+
+                $content = file_get_contents($file->getRealPath());
+                $result = $service->files->create($driveFile, [
+                    'data' => $content,
+                    'mimeType' => $file->getMimeType(),
+                    'uploadType' => 'multipart'
+                ]);
+
+                $permission = new Permission([
+                    'type' => 'anyone',
+                    'role' => 'reader',
+                ]);
+                $service->permissions->create($result->id, $permission);
+
+                return response()->json($result->id);
             } catch (\Exception $e) {
-                return response()->json(['error' => 'Error al guardar el archivo'], 500);
+                Log::error('Error al subir a Google Drive: ' . $e->getMessage());
+                return response()->json(['error' => 'Error al guardar el archivo: ' . $e->getMessage()], 500);
             }
         } else {
             return response()->json(['error' => 'No file uploaded'], 400);
         }
-
     }
 
-    // ESTO ES UN DESCARTE PARA CUANDO QUIERA VERIFICAR EL EMAIL
-    // public function verifyEmail(Request $request, $user)
-    // {
-    //     try {
-    //         // Validate request
-    //         $request->validate([
-    //             'password' => 'required|string',
-    //         ]);
-
-    //         // Find user
-    //         $user = User::findOrFail($user);
-
-    //         // Check if provided password matches
-    //         if (!Hash::check($request->password, $user->password)) {
-    //             return response()->json([
-    //                 'message' => 'La contraseña actual es incorrecta',
-    //                 'status' => 401
-    //             ], 401);
-    //         }
-
-    //         // Generate random 6-digit code
-    //         $code = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
-
-    //         // Store code in password_reset_tokens table
-    //         DB::table('password_reset_tokens')->updateOrInsert(
-    //             ['email' => $user->email],
-    //             [
-    //                 'token' => $code,
-    //                 'created_at' => now()
-    //             ]
-    //         );
-
-    //         // Send notification
-    //         $user->notify(new PasswordResetCodeNotification($code));
-
-    //         return response()->json([
-    //             'message' => 'Código de verificación enviado al correo',
-    //             'status' => 200
-    //         ]);
-
-    //     } catch (Exception $e) {
-    //         return response()->json([
-    //             'message' => 'Error al procesar la solicitud',
-    //             'status' => 500
-    //         ], 500);
-    //     }
-    // }
-
+    public function getProfilePhoto ($fileId) {
+        $url = "https://drive.google.com/uc?export=view&id={$fileId}";
+        $response = Http::get($url);
+        return response($response->body())->header('Content-Type', 'image/jpeg'); // Ajusta el tipo según la imagen
+    }
 
 }

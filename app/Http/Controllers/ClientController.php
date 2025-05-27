@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Exception;
+use App\Models\User;
 use App\Models\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -98,6 +99,10 @@ class ClientController extends Controller
                 'lat' => 'required|numeric',
                 'lng' => 'required|numeric',
             ]);
+
+            if ($request->profile_photo && $user->profile_photo) {
+                User::deleteProfilePhoto($user->profile_photo);
+            }
 
             $user->update([
                 'nombre' => $validated['nombre'],

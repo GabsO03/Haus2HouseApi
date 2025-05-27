@@ -368,7 +368,10 @@ class WorkerController extends Controller
                 'lat' => 'required|numeric',
                 'lng' => 'required|numeric',
             ]);
-            
+
+            if ($request->profile_photo && $user->profile_photo) {
+                User::deleteProfilePhoto($user->profile_photo);
+            }
 
             $user->update([
                 'nombre' => $validated['nombre'],
