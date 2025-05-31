@@ -12,7 +12,6 @@ class WorkerFactory extends Factory
 {
     public function definition(): array
     {
-        // Posibles horarios semanales (más amplios y variados)
         $horariosSemanales = [
             // Trabajador 1: Disponible casi todo el día, lunes a viernes
             [
@@ -65,11 +64,7 @@ class WorkerFactory extends Factory
                 ['dia' => 6, 'horas' => [null]],
             ],
         ];
-
-        // Elegir un horario semanal al azar
         $horarioSemanal = $this->faker->randomElement($horariosSemanales);
-
-        // Generar disponibilidad para 30 días
         $disponibilidad = [];
         for ($i = 0; $i < 30; $i++) {
             $date = Carbon::now()->addDays($i);
@@ -81,24 +76,20 @@ class WorkerFactory extends Factory
             ];
         }
 
+        $services = range(1, 7);
 
-        // Generar servicios aleatorios (1 a 10, entre 1 y 5 servicios)
-        $services = $this->faker->randomElements(range(1, 10), rand(1, 5));
-
-        $workerData = [
-            'user_id' => null, // Se asignará después en el seeder
-            'dni' => $this->faker->unique()->numerify('########A'),
-            'services_id' => json_encode($services),
+        return [
+            'user_id' => null, // Se asignará en el seeder
+            'dni' => $this->faker->unique()->regexify('[0-9]{8}[A-Z]'), // DNI más robusto
+            'services_id' => '{' . implode(',', $services) . '}',
             'horario_semanal' => json_encode($horarioSemanal),
             'disponibilidad' => json_encode($disponibilidad),
             'bio' => $this->faker->sentence(10),
-            'active' => $this->faker->boolean(90), // 90% de probabilidad de estar activo
+            'active' => $this->faker->boolean(90),
             'rating' => 0.00,
             'cantidad_ratings' => 0,
             'created_at' => Carbon::now(),
             'updated_at' => Carbon::now(),
         ];
-
-        return $workerData;
     }
 }

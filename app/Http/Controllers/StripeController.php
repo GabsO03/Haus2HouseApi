@@ -45,11 +45,8 @@ class StripeController extends Controller
     public static function aniadirMetodoPago(Request $request, string $id)
     {
         try {
-            Log::info('ID recibido: ' . $id);
-
             self::initialize();
             $user = User::with('client')->where('id', $id)->firstOrFail();
-            Log::info('Usuario encontrado: ' . $user->id);
 
             // Obtener el cliente relacionado
             $client = $user->client;
@@ -57,29 +54,21 @@ class StripeController extends Controller
                 throw new Exception('Client not found for user ID: ' . $id);
             }
 
-            Log::info('Cliente encontrado: ' . $client->id);
-            
             if (!$client->stripe_customer_id) {
-                Log::info('Cliente sin cuenta de Stripe configurada');
-
-                throw new Exception('Cliente sin cuenta de Stripe configurada');
-            }
-
-            // Verificar si ya hay un método de pago y eliminarlo
-            $existingMethods = self::$stripe->paymentMethods->all([
-                'customer' => $client->stripe_customer_id,
-                'type' => 'card',
-            ]);
-            foreach ($existingMethods->data as $method) {
-                self::$stripe->paymentMethods->detach($method->id);
-                Log::info('Método de pago anterior eliminado: ' . $method->id);
+                $stripeCustomer = StripeController::crearCliente(
+                    $user->email,
+                    $user->nombre
+                );
+                $client->update([
+                    'stripe_customer_id' => $stripeCustomer->id
+                ]);
             }
 
             // Validar el token de tarjeta (en lugar de datos crudos)
             $validated = $request->validate([
                 'card_token' => 'required|string', // Usamos un token de prueba de Stripe
             ]);
-            Log::info('Card token recibido: ' . $validated['card_token']);
+
 
             // Crear el método de pago con el token
             $paymentMethod = self::$stripe->paymentMethods->create([
@@ -88,11 +77,10 @@ class StripeController extends Controller
                     'token' => $validated['card_token']
                 ],
             ]);
-            Log::info('Payment method creado: ' . $paymentMethod->id);
 
             // Asociar el método de pago al cliente
             self::$stripe->paymentMethods->attach(
-                $paymentMethod->id, // Usamos el ID del método de pago creado
+                $paymentMethod->id,
                 ['customer' => $client->stripe_customer_id]
             );
 
@@ -108,6 +96,12 @@ class StripeController extends Controller
                 'status' => 200,
             ]);
         } catch (Exception $e) {
+            Log::error('Error al añadir método de pago', [
+                'user_id' => $id,
+                'error_message' => $e->getMessage(),
+                'card_token' => $request->input('card_token', 'no definido'),
+                'stripe_customer_id' => $client->stripe_customer_id ?? 'no definido',
+            ]);
             return response()->json([
                 'message' => 'Error al añadir método de pago: ' . $e->getMessage(),
                 'status' => 500,
@@ -126,19 +120,22 @@ class StripeController extends Controller
                 throw new Exception('Client not found for user ID: ' . $id);
             }
 
-            if (!$client->stripe_customer_id) {
-                throw new Exception('Cliente sin cuenta de Stripe configurada');
+            $metodos_pago = [];
+
+            if ($client->stripe_customer_id) {
+                $paymentMethods = self::$stripe->paymentMethods->all([
+                    'customer' => $client->stripe_customer_id,
+                    'type' => 'card',
+                ]);
+
+                $metodos_pago = $paymentMethods->data;
             }
 
-            $paymentMethods = self::$stripe->paymentMethods->all([
-                'customer' => $client->stripe_customer_id,
-                'type' => 'card',
-            ]);
-
             return response()->json([
-                'data' => $paymentMethods->data,
+                'data' => $metodos_pago,
                 'status' => 200,
             ]);
+
         } catch (Exception $e) {
             return response()->json([
                 'message' => 'Error al obtener métodos de pago: ' . $e->getMessage(),
@@ -190,6 +187,10 @@ class StripeController extends Controller
                 ],
             ]);
 
+            $client->update([
+                'stripe_customer_id' => null
+            ]);
+
             return response()->json([
                 'message' => 'Método de pago eliminado',
                 'status' => 200,
@@ -206,38 +207,62 @@ class StripeController extends Controller
     /**
      * Procesa el pago con Stripe
      */
-    public static function procesarPago(Service $service): void
-    {
-        self::initialize();
-        $client = $service->client;
-        if (!$client->stripe_customer_id) {
-            throw new Exception('Cliente sin cuenta de Stripe configurada');
+    public static function procesarPago(Service $service): void {
+        try {
+            Log::info('Iniciando procesamiento de pago', ['service_id' => $service->id]);
+
+            self::initialize();
+            Log::info('Stripe inicializado');
+
+            $client = $service->client;
+            if (!$client->stripe_customer_id) {
+                Log::error('Cliente sin cuenta de Stripe configurada', ['client_id' => $client->id]);
+                throw new Exception('Cliente sin cuenta de Stripe configurada');
+            }
+            Log::info('Cliente recuperado', ['client_id' => $client->id, 'stripe_customer_id' => $client->stripe_customer_id]);
+
+            $customer = self::$stripe->customers->retrieve($client->stripe_customer_id);
+            if (!$customer->invoice_settings->default_payment_method) {
+                Log::error('Cliente sin método de pago configurado', ['client_id' => $client->id, 'stripe_customer_id' => $client->stripe_customer_id]);
+                throw new Exception('Cliente sin método de pago configurado');
+            }
+            Log::info('Método de pago verificado', ['payment_method' => $customer->invoice_settings->default_payment_method]);
+
+            $amountInCents = (int) ($service->total_amount * 100); // Convierto a centavos
+            Log::info('Monto calculado', ['amount_in_cents' => $amountInCents, 'currency' => 'eur']);
+
+            $paymentIntent = self::$stripe->paymentIntents->create([
+                'amount' => $amountInCents,
+                'currency' => 'eur',
+                'customer' => $client->stripe_customer_id,
+                'payment_method' => $customer->invoice_settings->default_payment_method,
+                'confirm' => true,
+                'off_session' => true,
+            ]);
+            Log::info('PaymentIntent creado', ['payment_intent_id' => $paymentIntent->id, 'status' => $paymentIntent->status]);
+
+            // Esto por si la tarjeta no tiene fondos
+            if ($paymentIntent->status !== 'succeeded') {
+                Log::error('El pago falló', [
+                    'payment_intent_id' => $paymentIntent->id,
+                    'error_message' => $paymentIntent->last_payment_error ? $paymentIntent->last_payment_error->message : 'Razón desconocida'
+                ]);
+                throw new Exception('El pago falló: ' . ($paymentIntent->last_payment_error ? $paymentIntent->last_payment_error->message : 'Razón desconocida'));
+            }
+
+            $service->update([
+                'payment_stripe_id' => $paymentIntent->id,
+            ]);
+            Log::info('Servicio actualizado con PaymentIntent', ['service_id' => $service->id, 'payment_stripe_id' => $paymentIntent->id]);
+
+        } catch (Exception $e) {
+            Log::error('Error al procesar el pago', [
+                'service_id' => $service->id,
+                'error_message' => $e->getMessage(),
+                'client_id' => isset($client) ? $client->id : 'no definido'
+            ]);
+            throw $e; // Re-lanzamos la excepción para que el controlador que llama maneje el error
         }
-
-        $customer = self::$stripe->customers->retrieve($client->stripe_customer_id);
-        if (!$customer->invoice_settings->default_payment_method) {
-            throw new Exception('Cliente sin método de pago configurado');
-        }
-
-        $amountInCents = (int) ($service->total_amount * 100); // Convierto a centavos
-
-        $paymentIntent = self::$stripe->paymentIntents->create([
-            'amount' => $amountInCents,
-            'currency' => 'eur',
-            'customer' => $client->stripe_customer_id,
-            'payment_method' => $customer->invoice_settings->default_payment_method,
-            'confirm' => true,
-            'off_session' => true,
-        ]);
-
-        // Esto por si la tarjeta no tiene fondos
-        if ($paymentIntent->status !== 'succeeded') {
-            throw new Exception('El pago falló: ' . ($paymentIntent->last_payment_error ? $paymentIntent->last_payment_error->message : 'Razón desconocida'));
-        }
-
-        $service->update([
-            'payment_stripe_id' => $paymentIntent->id,
-        ]);
     }
 
     

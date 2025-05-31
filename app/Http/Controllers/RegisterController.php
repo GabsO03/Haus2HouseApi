@@ -26,11 +26,6 @@ class RegisterController extends Controller
                 'direccion' => 'nullable|string|max:255',
                 'password' => ['required', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
             ]);
-            
-            $stripeCustomer = StripeController::crearCliente(
-                $validatedAttributes['email'],
-                $validatedAttributes['nombre']
-            );
 
             $user = User::create([
                 'nombre' => $validatedAttributes['nombre'],
@@ -43,7 +38,7 @@ class RegisterController extends Controller
 
             Client::create([
                 'user_id' => $user->id,
-                'stripe_customer_id' => $stripeCustomer->id,
+                'stripe_customer_id' => null,
                 'rating' => 0.00,
                 'cantidad_ratings' => 0,
             ]);

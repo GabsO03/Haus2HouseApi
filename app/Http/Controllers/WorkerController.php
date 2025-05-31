@@ -66,7 +66,7 @@ class WorkerController extends Controller
             $worker = Worker::create([
                 'user_id' => $user->id,
                 'dni' => $validated['dni'],
-                'services_id' => json_encode($validated['services_id']),
+                'services_id' => '{' . implode(',', $validated['services_id']) . '}',
                 'bio' => $validated['bio'],
                 'active' => $validated['active'] ?? false,
                 'rating' => 0.00,
@@ -153,9 +153,7 @@ class WorkerController extends Controller
                             $subSubQuery->selectRaw('1')
                                 ->fromRaw('workers as w')
                                 ->whereColumn('w.id', 'workers.id')
-                                ->whereRaw("jsonb_typeof(w.services_id) = 'array'")
-                                ->whereRaw("EXISTS (SELECT 1 FROM jsonb_array_elements_text(w.services_id) as elem WHERE ? ~ '^[0-9]+$' AND elem = ?)",
-                                [$filter, $filter]);
+                                ->whereRaw('? = ANY(w.services_id)', [$filter]);
                         })
                         ->orWhereHas('user', function ($subSubQuery) use ($filter) {
                             $subSubQuery->where('nombre', 'ILIKE', "%{$filter}%")
@@ -196,50 +194,44 @@ class WorkerController extends Controller
             Log::info('Desde encontrarWorker: Parsing start time and extracting day and hour', [
                 'start_time' => $validated['start_time']
             ]);
+
+            $serviceTypeId = $validated['service_type_id'];
             $startTime = Carbon::parse($validated['start_time'])->setTimezone('UTC');
-            $dayOfMonth = $startTime->day; // Ejemplo: 19
+            $endTime = Carbon::parse($validated['end_time'])->setTimezone('UTC');
+            $diaBuscado = $startTime->day; // Ejemplo: 19
             $startHour = $startTime->format('H:i'); // Ejemplo: 08:00
-            Log::info('Desde encontrarWorker: Start time parsed', [
-                'dayOfMonth' => $dayOfMonth,
-                'startHour' => $startHour
-            ]);
+            $endHour = $endTime->format('H:i'); // Ejemplo: 12:00
 
-            // 2: Construir la consulta base para buscar trabajadores
-            Log::info('Desde encontrarWorker: Building worker query');
             $query = Worker::where('active', true)
-                ->whereRaw("services_id @> ?", [json_encode([$validated['service_type_id']])])
-                ->whereRaw("EXISTS (
+                ->whereRaw('? = ANY(services_id)', [$serviceTypeId])
+                ->whereRaw(
+                "EXISTS (
                     SELECT 1
-                    FROM jsonb_array_elements(disponibilidad) AS d,
-                        jsonb_array_elements(d->'horas') AS h(hora)
-                    WHERE (d->>'dia')::int = ?
-                    AND ?::time BETWEEN split_part(h.hora #>> '{}', '-', 1)::time AND split_part(h.hora #>> '{}', '-', 2)::time
-                )", [$dayOfMonth, $startHour]);
+                    FROM json_array_elements(disponibilidad) AS elem
+                    WHERE elem->>'dia' = ?
+                    AND EXISTS (
+                        SELECT 1
+                        FROM json_array_elements(elem->'horas') AS hora
+                        WHERE hora IS NOT NULL
+                    )
+                )",
+                [$diaBuscado]
+            );
 
-            // 3: Excluir al trabajador anterior si aplica
             if ($previousWorkerId != null) {
                 Log::info('Desde encontrarWorker: Excluding previous worker', ['previousWorkerId' => $previousWorkerId]);
                 $query->where('id', '!=', $previousWorkerId);
             }
 
-            // 4: Ejecutar la consulta
-            Log::info('Desde encontrarWorker: Executing query to find worker');
-            $trabajadorEncontrado = $query->first();
+            $workers = $query->get();
 
-            // 5: Registrar el resultado
-            if ($trabajadorEncontrado) {
-                Log::info('Desde encontrarWorker: Worker found', [
-                    'worker_id' => $trabajadorEncontrado->id,
-                    'worker_data' => $trabajadorEncontrado->toArray()
-                ]);
-            } else {
-                Log::warning('Desde encontrarWorker: No worker found matching criteria', [
-                    'service_type_id' => $validated['service_type_id'],
-                    'dayOfMonth' => $dayOfMonth,
-                    'startHour' => $startHour,
-                    'previousWorkerId' => $previousWorkerId
-                ]);
-            }
+            $trabajadorEncontrado = $workers->first(function ($worker) use ($diaBuscado, $startHour, $endHour) {
+                return self::coincideDisponibilidad($worker, $diaBuscado, $startHour, $endHour);
+            });
+
+            Log::info('Desde encontrarWorker: Recogiendo datos', [
+                'worker' => $trabajadorEncontrado
+            ]);
 
             return $trabajadorEncontrado;
         } catch (Exception $e) {
@@ -254,6 +246,34 @@ class WorkerController extends Controller
         }
     }
 
+    public static function coincideDisponibilidad($worker, $diaBuscado, $startHour, $endHour)
+    {
+        $dia = collect($worker->disponibilidad)->firstWhere('dia', (string)$diaBuscado);
+        Log::info('Disponibilidad del worker:', ['disponibilidad' => $worker->disponibilidad]);
+
+        Log::info('Desde contains: Día actual, no entra', ['día' => $dia ?? 'dia no definido']);
+        if (!$dia || !isset($dia['horas']) || empty($dia['horas'])) {
+            return false;
+        }
+
+        return collect($dia['horas'])->contains(function ($rango) use ($startHour, $endHour) {
+            if ($rango === null) {
+                return false;
+            }
+
+            Log::info('Desde contains: Rango actual', ['rango' => $rango]);
+            Log::info('Desde contains: Hora inicio y fin del servicio', [
+                'startHour' => $startHour,
+                'endHour' => $endHour
+            ]);
+
+            [$rangoInicio, $rangoFin] = explode('-', $rango);
+            
+            // Comparar directamente las horas como strings
+            return $startHour >= $rangoInicio && $endHour <= $rangoFin;
+        });
+    }
+
     /**
     * Actualiza la disponibilidad del trabajador según el horario de un servicio aceptado
     */
@@ -263,7 +283,13 @@ class WorkerController extends Controller
 
             if (empty($disponibilidad)) {
                 $worker = Worker::findOrFail($service->worker_id);
-                $disponibilidad = json_decode($worker->disponibilidad, true);
+                $disponibilidad = is_string($worker->disponibilidad)
+                ? json_decode($worker->disponibilidad, true)
+                : $worker->disponibilidad;
+                Log::info('Tipo de campo disponibilidad', [
+                    'disponibilidad_type' => gettype($disponibilidad),
+                    'disponibilidad_value' => $disponibilidad,
+                ]);
             }
 
             // Obtengo el día del mes y los horarios del servicio
@@ -367,10 +393,27 @@ class WorkerController extends Controller
                 'profile_photo' => 'nullable|string',
                 'lat' => 'required|numeric',
                 'lng' => 'required|numeric',
+            ], [
+                'nombre.required' => 'El nombre es obligatorio.',
+                'nombre.min' => 'El nombre debe tener al menos 3 caracteres.',
+                'email.required' => 'El correo electrónico es obligatorio.',
+                'email.email' => 'El correo electrónico debe ser una dirección válida.',
+                'telefono.max' => 'El teléfono no puede tener más de 20 caracteres.',
+                'direccion.max' => 'La dirección no puede tener más de 255 caracteres.',
+                'dni.required' => 'El DNI es obligatorio.',
+                'dni.regex' => 'El DNI debe tener 8 dígitos seguidos de una letra mayúscula.',
+                'services_id.required' => 'Debes seleccionar al menos un servicio.',
+                'bio.string' => 'La biografía debe ser una cadena de texto.',
+                'active.required' => 'El estado (activo) es obligatorio.',
+                'active.in' => 'El estado debe ser 0 (inactivo) o 1 (activo).',
+                'lat.required' => 'La latitud es obligatoria.',
+                'lng.required' => 'La longitud es obligatoria.',
             ]);
 
-            if ($request->profile_photo && $user->profile_photo) {
-                User::deleteProfilePhoto($user->profile_photo);
+            if (
+                $request->profile_photo && $user->profile_photo 
+            ) {
+                UserController::deleteProfilePhoto($user->profile_photo);
             }
 
             $user->update([
@@ -386,7 +429,7 @@ class WorkerController extends Controller
             // Actualizar el trabajador
             $worker->update([
                 'dni' => $validated['dni'],
-                'services_id' => json_encode($validated['services_id']), // Guardar como JSON
+                'services_id' => '{' . implode(',', $validated['services_id']) . '}', // Guardar como array
                 'bio' => $validated['bio'] ?? '',
                 'active' => $validated['active'],
             ]);
@@ -479,6 +522,7 @@ class WorkerController extends Controller
 
             $worker->update([
                 'horario_semanal' => json_encode($validated['horario_semanal']),
+                'disponibilidad' => $disponibilidad
             ]);
 
             $worker->load('user');
@@ -497,6 +541,7 @@ class WorkerController extends Controller
             ], 500);
         }
     }
+
 
     private function generateMonthlyAvailability(array $horarioSemanal, Collection $services, Carbon $today): array
     {

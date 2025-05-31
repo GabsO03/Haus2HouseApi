@@ -100,8 +100,11 @@ class ClientController extends Controller
                 'lng' => 'required|numeric',
             ]);
 
-            if ($request->profile_photo && $user->profile_photo) {
-                User::deleteProfilePhoto($user->profile_photo);
+            if (
+                $request->profile_photo && $user->profile_photo &&
+                ($request->profile_photo != $user->profile_photo)
+                ) {
+                UserController::deleteProfilePhoto($user->profile_photo);
             }
 
             $user->update([

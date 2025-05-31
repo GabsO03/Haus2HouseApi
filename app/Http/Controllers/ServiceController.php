@@ -112,7 +112,29 @@ class ServiceController extends Controller
                 'client_location' => 'required|string|max:255',
                 'total_amount' => 'required|numeric|min:0',
                 'payment_method' => 'required|string',
+            ], [
+                'description.string' => 'La descripción debe ser un texto.',
+                'description.max' => 'La descripción no puede exceder los 255 caracteres.',
+                'specifications.string' => 'Las especificaciones deben ser un texto.',
+                'specifications.max' => 'Las especificaciones no pueden exceder los 255 caracteres.',
+                'request_time.required' => 'La fecha de solicitud es obligatoria.',
+                'request_time.date' => 'La fecha de solicitud debe ser una fecha válida.',
+                'start_time.required' => 'La fecha de inicio es obligatoria.',
+                'start_time.date' => 'La fecha de inicio debe ser una fecha válida.',
+                'start_time.after' => 'La fecha de inicio debe ser posterior a la fecha de solicitud.',
+                'end_time.required' => 'La fecha de fin es obligatoria.',
+                'end_time.date' => 'La fecha de fin debe ser una fecha válida.',
+                'end_time.after' => 'La fecha de fin debe ser posterior a la fecha de inicio.',
+                'client_location.required' => 'La ubicación del cliente es obligatoria.',
+                'client_location.string' => 'La ubicación del cliente debe ser un texto.',
+                'client_location.max' => 'La ubicación del cliente no puede exceder los 255 caracteres.',
+                'total_amount.required' => 'El monto total es obligatorio.',
+                'total_amount.numeric' => 'El monto total debe ser un número.',
+                'total_amount.min' => 'El monto total no puede ser negativo.',
+                'payment_method.required' => 'El método de pago es obligatorio.',
+                'payment_method.string' => 'El método de pago debe ser un texto.',
             ]);
+            
             Log::info('Request data validated successfully', ['validated' => $validated]);
 
             // 2: Asignar un trabajador
@@ -285,8 +307,8 @@ class ServiceController extends Controller
                     })
                     ->with('client.user', 'worker.user', 'serviceType')
                     ->orderBy('start_time')
-        ->get();
-}
+                    ->get();
+            }
 
             return response()->json([
                 'data' => $services,
@@ -307,13 +329,16 @@ class ServiceController extends Controller
      */
     public function actualizarEstado(Request $request, $id) {
         try {
+            Log::info('Inicio del método actualizarEstado', ['id' => $id]);
             $service = Service::findOrFail($id);
 
+            Log::info('Validando el estado', ['status' => $request->status]);
             $request->validate([
                 'status' => 'required|in:' . implode(',', array_column(Estados::cases(), 'value'))
             ]);
 
             $nuevoEstado = Estados::from($request['status']);
+            Log::info('Estado validado', ['nuevo_estado' => $nuevoEstado->value]);
 
             switch ($service->status->value) {
                 case Estados::ASSIGNED->value:
@@ -327,13 +352,16 @@ class ServiceController extends Controller
 
                     // Sí se acepta el servicio, se realiza el pago automático
                     if ($nuevoEstado === Estados::ACCEPTED) {
+                        Log::info('Intenta aceptar');
                         try {
                             if ($service->payment_method === 'card') {
+                                Log::info('Procesa el pago');
                                 StripeController::procesarPago($service);
                                 $service->payment_status = 'pagado';
                             }
 
                             // Actualizar disponibilidad
+                            Log::info('Recupera el trabajador para actualizar su disponibilidad');
                             $worker = Worker::findOrFail($service->worker_id);
                             $disponibilidad = WorkerController::updateDisponibilidadPorServicio($service);
                             if ($disponibilidad === false) {
@@ -350,7 +378,8 @@ class ServiceController extends Controller
                             }
 
                             // Guardar la disponibilidad actualizada
-                            $worker->disponibilidad = json_encode($disponibilidad);
+                            Log::info('Actualiza el trabajador');
+                            $worker->disponibilidad = $disponibilidad;
                             $worker->save();
 
                         } catch (Exception $e) {
@@ -422,11 +451,17 @@ class ServiceController extends Controller
                         ]);
 
                     } else {
-                        return response()->json([
-                            'data' => [],
-                            'message' => 'Debe confirmar el pago del servicio antes de completar',
-                            'status' => 400
-                        ]);
+                        if ($service->payment_status !== 'pagado') {
+                            Log::warning('Intento de completar servicio en efectivo sin pago', [
+                                'service_id' => $service->id,
+                                'payment_status' => $service->payment_status
+                            ]);
+                            return response()->json([
+                                'data' => [],
+                                'message' => 'El servicio en efectivo debe estar pagado para completarse',
+                                'status' => 400
+                            ], 400);
+                        }
                     }
 
 
@@ -453,6 +488,11 @@ class ServiceController extends Controller
                 'status' => 200
             ]);
         } catch (Exception $e) {
+            Log::error('Error al actualizar estado del servicio', [
+                'error' => $e->getMessage(),
+                'id' => $id,
+                'status' => $request->status ?? 'no definido'
+            ]);
             return response()->json([
                 'data' => [],
                 'message' => 'Error al actualizar estado del servicio',
