@@ -110,7 +110,6 @@ class ClientController extends Controller
             $user->update([
                 'nombre' => $validated['nombre'],
                 'email' => $validated['email'],
-                'password' => isset($validated['password']) ? bcrypt($validated['password']) : $user->password,
                 'telefono' => $validated['telefono'] ?? $user->telefono,
                 'direccion' => $validated['direccion'] ?? $user->direccion,
                 'profile_photo' => $validated['profile_photo'],
