@@ -112,11 +112,15 @@ class UserController extends Controller
             $file = $request->file('profile_photo');
             $fileName = time() . '_' . $file->getClientOriginalName();
 
+            $credentials = env('APP_ENV') == 'production' ?
+                env('GOOGLE_DRIVE_CREDENTIALS') :
+                storage_path('app/credentials.json');            
+
             try {
                 $client = new Client();
                 $client->setApplicationName('Haus2HouseApi');
                 $client->setScopes([Drive::DRIVE_FILE]);
-                $client->setAuthConfig(storage_path('app/credentials.json'));
+                $client->setAuthConfig($credentials);
                 $client->setAccessType('offline');
 
                 $service = new Drive($client);
