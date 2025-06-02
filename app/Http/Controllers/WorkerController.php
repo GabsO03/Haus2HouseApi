@@ -209,6 +209,8 @@ class WorkerController extends Controller
                     SELECT 1
                     FROM json_array_elements(disponibilidad) AS elem
                     WHERE elem->>'dia' = ?
+                    AND elem->>'horas' IS NOT NULL
+                    AND json_typeof(elem->'horas') = 'array'
                     AND EXISTS (
                         SELECT 1
                         FROM json_array_elements(elem->'horas') AS hora
@@ -451,38 +453,6 @@ class WorkerController extends Controller
         }
     }
 
-    public function toggleWorkerActivo($worker)
-    {
-        try {
-            // Buscar el trabajador
-            $worker = Worker::where('user_id', $worker)->firstOrFail();
-
-            // Cambiar el estado activo (toggle)
-            $newStatus = !$worker->active;
-
-            // Actualizar el trabajador
-            $worker->update([
-                'active' => $newStatus
-            ]);
-
-            // Recargar el trabajador con la relación user
-            $worker = Worker::where('user_id', $worker->user_id)->with('user')->first();
-
-            return response()->json([
-                'data' => $worker,
-                'message' => $newStatus ? 'Trabajador activado correctamente' : 'Trabajador desactivado correctamente',
-                'status' => 200
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'data' => [],
-                'message' => 'Error al actualizar perfil: ' . $e->getMessage(),
-                'status' => 500
-            ], 500);
-        }
-    }
-
-
     /**
      * Actualiza el horario del trabajador
      */
@@ -542,6 +512,37 @@ class WorkerController extends Controller
         }
     }
 
+    
+    public function toggleWorkerActivo($worker)
+    {
+        try {
+            // Buscar el trabajador
+            $worker = Worker::where('user_id', $worker)->firstOrFail();
+
+            // Cambiar el estado activo (toggle)
+            $newStatus = !$worker->active;
+
+            // Actualizar el trabajador
+            $worker->update([
+                'active' => $newStatus
+            ]);
+
+            // Recargar el trabajador con la relación user
+            $worker = Worker::where('user_id', $worker->user_id)->with('user')->first();
+
+            return response()->json([
+                'data' => $worker,
+                'message' => $newStatus ? 'Trabajador activado correctamente' : 'Trabajador desactivado correctamente',
+                'status' => 200
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'data' => [],
+                'message' => 'Error al actualizar perfil: ' . $e->getMessage(),
+                'status' => 500
+            ], 500);
+        }
+    }
 
     private function generateMonthlyAvailability(array $horarioSemanal, Collection $services, Carbon $today): array
     {

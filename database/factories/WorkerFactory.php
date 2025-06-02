@@ -83,7 +83,7 @@ class WorkerFactory extends Factory
             'dni' => $this->faker->unique()->regexify('[0-9]{8}[A-Z]'), // DNI más robusto
             'services_id' => '{' . implode(',', $services) . '}',
             'horario_semanal' => json_encode($horarioSemanal),
-            'disponibilidad' => json_encode($disponibilidad),
+            'disponibilidad' => $disponibilidad,
             'bio' => $this->faker->sentence(10),
             'active' => $this->faker->boolean(90),
             'rating' => 0.00,
