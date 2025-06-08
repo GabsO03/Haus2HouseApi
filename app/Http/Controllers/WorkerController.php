@@ -618,7 +618,7 @@ class WorkerController extends Controller
     public function destroy($id)
     {
         try {
-            $worker = Worker::findOrFail($id);
+            $worker = Worker::where('user_id', $id)->firstOrFail();
             $user = $worker->user; // Esto para eliinar tambien el user
     
             $worker->delete();

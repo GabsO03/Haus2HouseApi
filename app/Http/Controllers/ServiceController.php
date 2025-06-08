@@ -394,7 +394,12 @@ class ServiceController extends Controller
                                 $service->payment_status = 'reembolsado';
                             }
                             return response()->json([
-                                'data' => [],
+                                'data' => [
+                                    'error_message' => $e->getMessage(),
+                                    'error_line' => $e->getLine(),
+                                    'error_file' => $e->getFile(),
+                                    'request' => $request->all()
+                                ],
                                 'message' => 'No se pudo procesar el pago o actualizar la disponibilidad',
                                 'status' => 400
                             ], 400);
