@@ -148,18 +148,23 @@ class WorkerController extends Controller
                 foreach ($filters as $filter) {
                     $filter = trim($filter); // Le quito los espacios
                     
-                    $query->orWhere(function ($subQuery) use ($filter) {
-                        $subQuery->whereExists(function ($subSubQuery) use ($filter) {
-                            $subSubQuery->selectRaw('1')
-                                ->fromRaw('workers as w')
-                                ->whereColumn('w.id', 'workers.id')
-                                ->whereRaw('? = ANY(w.services_id)', [$filter]);
-                        })
-                        ->orWhereHas('user', function ($subSubQuery) use ($filter) {
-                            $subSubQuery->where('nombre', 'ILIKE', "%{$filter}%")
-                                        ->orWhere('email', 'ILIKE', "%{$filter}%");
+                    if (is_numeric($filter)) {
+                        $query->orWhere(function ($subQuery) use ($filter) {
+                            $subQuery->whereExists(function ($subSubQuery) use ($filter) {
+                                $subSubQuery->selectRaw('1')
+                                    ->fromRaw('workers as w')
+                                    ->whereColumn('w.id', 'workers.id')
+                                    ->whereRaw('? = ANY(w.services_id)', [$filter]);
+                            });
                         });
-                    });
+                    } else {
+                        $query->orWhere(function ($subQuery) use ($filter) {
+                            $subQuery->whereHas('user', function ($subSubQuery) use ($filter) {
+                                $subSubQuery->where('nombre', 'ILIKE', "%{$filter}%")
+                                            ->orWhere('email', 'ILIKE', "%{$filter}%");
+                            });
+                        });
+                    }
                 }
             });
     
