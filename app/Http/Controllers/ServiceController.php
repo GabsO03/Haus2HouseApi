@@ -347,7 +347,7 @@ class ServiceController extends Controller
 
             switch ($service->status->value) {
                 case Estados::ASSIGNED->value:
-                    if (!in_array($nuevoEstado, [Estados::ACCEPTED, Estados::CANCELLED])) {
+                    if (!in_array($nuevoEstado, [Estados::ACCEPTED, Estados::REJECTED, Estados::CANCELLED])) {
                         return response()->json([
                             'data' => [],
                             'message' => 'Un servicio asignado solo puede ser aceptado o cancelado',
@@ -405,7 +405,7 @@ class ServiceController extends Controller
                             ], 400);
                         }
                     }
-                    elseif ($nuevoEstado === Estados::CANCELLED) {
+                    elseif ($nuevoEstado === Estados::REJECTED) {
                         $this->reasignarWorker($service);
                         
                         $service = $service->fresh()->load('client.user', 'worker.user', 'serviceType'); // Con fresh me aseguro que el objeto este actualizado
@@ -413,6 +413,14 @@ class ServiceController extends Controller
                         return response()->json([
                             'data' => $service,
                             'message' => 'Servicio cancelado y reasignado',
+                            'status' => 200
+                        ]);
+                    }
+                    else {
+                        $this->cancelarServicio($service, true); // Aquí es true porque en este estado solo puede cancelar el cliente
+                        return response()->json([
+                            'data' => $service->fresh()->load('client.user', 'worker.user', 'serviceType'),
+                            'message' => 'Servicio cancelado con reembolso',
                             'status' => 200
                         ]);
                     }
@@ -646,13 +654,16 @@ class ServiceController extends Controller
     /**
      * Función por si el servicio es cancelado
      */
-    public function cancelarServicio(Service $service) : void {
+    public function cancelarServicio(Service $service, $eliminarTrabajador = false) : void {
 
         // Procesar reembolso
-        if ($service->payment_method == 'Efectivo' && $service->payment_stripe_id) {
+        if ($service->payment_method == 'cash' && $service->payment_stripe_id) {
             StripeController::reembolsar($service);
         }
 
+        if ($eliminarTrabajador) {
+            $service->worker_id = 'none';
+        }
         $service->status = Estados::CANCELLED;
         $service->save();
         
@@ -664,26 +675,36 @@ class ServiceController extends Controller
      */
     private function reasignarWorker(Service $service)
     {
-        // Busca de nuevo un trabajador que cumpla conlas condiciones
-        $previousWorkerId = $service->worker_id;
-        $worker = WorkerController::encontrarWorker([
-            'service_type_id' => $service->service_type_id,
-            'start_time' => $service->start_time,
-        ], $previousWorkerId);
+        try {
 
-        if (!$worker) {
-            $service->status = Estados::REJECTED;
-            // $service->worker_id = null;
+            // Busca de nuevo un trabajador que cumpla con las condiciones
+            $previousWorkerId = $service->worker_id;
+            $worker = WorkerController::encontrarWorker([
+                'service_type_id' => $service->service_type_id,
+                'start_time' => $service->start_time,
+                'end_time' => $service->end_time,
+            ], $previousWorkerId);
+
+            if (!$worker) {
+                $service->status = Estados::REJECTED;
+                $service->save();
+                $service->client->user->notify(new ServiceAssignedNotification($service));
+                return;
+            }
+
+            $service->worker_id = $worker->id;
+            $service->status = Estados::ASSIGNED;
             $service->save();
-            $service->client->user->notify(new ServiceAssignedNotification($service));
-            return;
+
+            UserController::notifyUsers($service, $worker);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'data' => [],
+                'message' => 'No se pudo procesar el pago o actualizar la disponibilidad',
+                'status' => 400
+            ], 400);
         }
-
-        $service->worker_id = $worker->id;
-        $service->status = Estados::ASSIGNED;
-        $service->save();
-
-        UserController::notifyUsers($service, $worker);
     }
-
 }

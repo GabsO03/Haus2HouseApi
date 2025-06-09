@@ -28,6 +28,14 @@ class ServiceAssignedNotification extends Notification
             $esCliente = $notifiable->rol === 'client';
 
         switch ($nuevoEstado) {
+            
+            case 'assigned' && $this->service->previousWorkerId !== null: // Interpretado como "reasignado"
+                if ($esCliente) {
+                    return '<p>Tu servicio de <strong>' . $this->service->serviceType->name . '</strong> ha sido reasignado a un nuevo trabajador: <strong>' . $this->service->worker->user->nombre . '</strong>.</p>';
+                } else {
+                    return '<p>Te han reasignado el servicio de <strong>' . $this->service->serviceType->name . '</strong> para el cliente: <strong>' . $this->service->client->user->nombre . '</strong>.</p>';
+                }
+
             case 'assigned':
                 if ($esCliente) {
                     return '<p>Tu servicio de <strong>' . $this->service->serviceType->name . '</strong> ha sido asignado a nuestro trabajador: <strong>' . $this->service->worker->user->nombre . '</strong>.</p>';
@@ -45,12 +53,10 @@ class ServiceAssignedNotification extends Notification
                         return '<p>El servicio de <strong>' . $this->service->serviceType->name . '</strong> para el cliente <strong>' . $this->service->client->user->nombre . '</strong> ha sido cancelado.</p>';
                     }
                 }
-
-            case 'assigned' && $this->service->previousWorkerId !== null: // Interpretado como "reasignado"
+            
+            case 'rejected': // Interpretado como "reasignado"
                 if ($esCliente) {
-                    return '<p>Tu servicio de <strong>' . $this->service->serviceType->name . '</strong> ha sido reasignado a un nuevo trabajador: <strong>' . $this->service->worker->user->nombre . '</strong>.</p>';
-                } else {
-                    return '<p>Te han reasignado el servicio de <strong>' . $this->service->serviceType->name . '</strong> para el cliente: <strong>' . $this->service->client->user->nombre . '</strong>.</p>';
+                    return '<p>Tu servicio de <strong>' . $this->service->serviceType->name . '</strong> ha sido rechazado y no pudimos reasignar a otro trabajador. <p>';
                 }
 
             default:
