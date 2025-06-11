@@ -657,7 +657,7 @@ class ServiceController extends Controller
     public function cancelarServicio(Service $service, $eliminarTrabajador = false) : void {
 
         // Procesar reembolso
-        if ($service->payment_method == 'cash' && $service->payment_stripe_id) {
+        if ($service->payment_method == 'card' && $service->payment_stripe_id) {
             StripeController::reembolsar($service);
         }
 
