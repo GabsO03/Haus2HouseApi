@@ -96,8 +96,8 @@ class ClientController extends Controller
                 'telefono' => 'nullable|string|max:20',
                 'direccion' => 'nullable|string|max:255',
                 'profile_photo' => 'nullable|string',
-                'lat' => 'required|numeric',
-                'lng' => 'required|numeric',
+                'lat' => 'nullable|numeric',
+                'lng' => 'nullable|numeric',
             ]);
 
             if (

@@ -398,8 +398,8 @@ class WorkerController extends Controller
                 'bio' => 'nullable|string',
                 'active' => 'required|in:0,1',
                 'profile_photo' => 'nullable|string',
-                'lat' => 'required|numeric',
-                'lng' => 'required|numeric',
+                'lat' => 'nullable|numeric',
+                'lng' => 'nullable|numeric',
             ], [
                 'nombre.required' => 'El nombre es obligatorio.',
                 'nombre.min' => 'El nombre debe tener al menos 3 caracteres.',
@@ -413,8 +413,6 @@ class WorkerController extends Controller
                 'bio.string' => 'La biografía debe ser una cadena de texto.',
                 'active.required' => 'El estado (activo) es obligatorio.',
                 'active.in' => 'El estado debe ser 0 (inactivo) o 1 (activo).',
-                'lat.required' => 'La latitud es obligatoria.',
-                'lng.required' => 'La longitud es obligatoria.',
             ]);
 
             if (
